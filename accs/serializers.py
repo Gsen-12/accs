@@ -1,3 +1,4 @@
+from django.contrib.auth.tokens import default_token_generator
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -29,7 +30,11 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super(MyTokenObtainPairSerializer, cls).get_token(user)
-
         # 添加额外信息
         token['username'] = user.username
         return token
+
+    # def generate_access_token(cls, user):
+    #     access_token = default_token_generator.make_token(user)
+    #     return access_token
+

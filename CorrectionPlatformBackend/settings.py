@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/5.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
-
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -101,13 +101,44 @@ REST_FRAMEWORK = {
         'accs.authentication.CustomJWTAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
+    ]
+}
+
+# JWT_AUTH = {
+#     # token有效期为24小时
+#     'JWT_EXPIRATION_DELTA': datetime.timedelta(days=1),
+# }
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),  # 默认值
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+}
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://@127.0.0.1:6379/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            # "PASSWORD": "123456"
+            "SOCKET_CONNECT_TIMEOUT": 5,
+            "SOCKET_TIMEOUT": 5,
+        },
+        "KEY_PREFIX": "jwt_"
+    }
 }
 
 AUTHENTICATION_BACKENDS = (
     'accs.views.MyCustomBackend',
+    'django.contrib.auth.backends.ModelBackend',
 )
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
+
 
 AUTH_PASSWORD_VALIDATORS = [
     {

@@ -1,28 +1,26 @@
-import time
 import datetime
 
+from django.contrib.auth import authenticate, get_user_model
 from django.db.models import Q
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt, csrf_protect
+from django_redis import get_redis_connection
 from rest_framework import status
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .serializers import MyTokenObtainPairSerializer
-from rest_framework.permissions import AllowAny
-from accs.models import Roles, BlacklistedToken
-from accs.serializers import UserSerializer
-from django.contrib.auth import authenticate, get_user_model
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.http import JsonResponse
-from .utils import token
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+from accs.models import Roles
+from accs.serializers import UserSerializer
 
 User = get_user_model()
 
 
 def csrf_failure(request, reason=""):
     return JsonResponse({"error": "CSRF验证失败"}, status=403)
+
+
 # Create your views here.
 
 
@@ -41,47 +39,76 @@ class RegisterView(APIView):
 
 
 class LoginView(APIView):
+    permission_classes = [AllowAny]
+
     @staticmethod
     def post(request):
         username = request.data.get('username')
         password = request.data.get('password')
         user = authenticate(username=username, password=password)
+        if not user:
+            return Response({"error": "无效的凭证"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        if user is not None:
-            token = MyTokenObtainPairSerializer.get_token(user)
-            # token.set_exp(lifetime=datetime.timedelta())
-            return Response({'message': 'Login successful', 'token': str(token)}, status=status.HTTP_200_OK)
-        return Response({'message': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+        try:
+            # 生成双令牌
+            refresh = RefreshToken.for_user(user)
+            access_token = str(refresh.access_token)
+            refresh_token = str(refresh)
+
+            # 存储到Redis
+            redis_conn = get_redis_connection("default")
+            user_id = user.id
+
+            # 转换时间单位为整数秒
+            access_expire = int(datetime.timedelta(minutes=30).total_seconds())
+            refresh_expire = int(datetime.timedelta(days=7).total_seconds())
+
+            # 使用正确参数顺序：name, time, value
+            redis_conn.setex(
+                name=f"access_{user_id}",
+                time=access_expire,
+                value=access_token.encode('utf-8')  # 转换为bytes
+            )
+            redis_conn.setex(
+                name=f"refresh_{user_id}",
+                time=refresh_expire,
+                value=refresh_token.encode('utf-8')
+            )
+
+            return Response({
+                "access": access_token,
+                "refresh": refresh_token,
+                "user_id": user_id,
+                "expires_in": access_expire
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": f"令牌生成失败: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@csrf_exempt
 class LogoutView(APIView):
-    @csrf_protect
     def post(self, request):
         try:
-            refresh_token = request.data.get('refresh_token')
-            if not refresh_token:
-                return Response(
-                    {"error": "缺少 refresh_token"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # 将 refresh_token 加入黑名单
-            token = RefreshToken(refresh_token)
-            BlacklistedToken.add(token)
+            # refresh_token = request.data.get('refresh')
+            # access_token = request.auth
+            #
 
-            return Response({"message": "退出成功"}, status=status.HTTP_200_OK)
+            if not request.auth:
+                return Response({"error": "未登录"}, status=400)
+            # # 加入黑名单
+            # add_to_blacklist(access_token)
+            # add_to_blacklist(RefreshToken(refresh_token))
+
+            print(type(request))
+
+            # 清理Redis存储
+            user_id = request.user.id
+            redis_conn = get_redis_connection("default")
+            redis_conn.delete(f"access_{user_id}", f"refresh_{user_id}")
+
+            return Response({"message": "成功登出"}, status=200)
         except Exception as e:
-            return Response(
-                {"error": "无效的 Token"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        # token = MyTokenObtainPairSerializer.get_token(user)
-        # token.set_exp(lifetime=datetime.timedelta())
-
-
-class MyObtainTokenPairView(TokenObtainPairView):
-    permission_classes = (AllowAny,)
-    serializer_class = MyTokenObtainPairSerializer
+            return Response({"error": str(e)}, status=400)
 
 
 # MyCustomBackend
