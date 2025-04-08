@@ -2,7 +2,7 @@ from django.contrib.auth.tokens import default_token_generator
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from accs.models import Roles
+from accs.models import Roles, UserFile
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -38,3 +38,10 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     #     access_token = default_token_generator.make_token(user)
     #     return access_token
 
+class FileUploadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserFile
+        fields = ['file']
+        extra_kwargs = {
+            'file': {'write_only': True}
+        }

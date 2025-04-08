@@ -10,9 +10,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-
+from rest_framework.generics import RetrieveAPIView, ListAPIView
+from rest_framework.permissions import IsAuthenticated
 from accs.models import Roles
-from accs.serializers import UserSerializer
+from accs.permissions import IsAdminOrOwnerPermission, IsAdminPermission
+from accs.serializers import UserSerializer, FileUploadSerializer
+from rest_framework.parsers import MultiPartParser, FormParser
 
 User = get_user_model()
 
@@ -25,6 +28,7 @@ def csrf_failure(request, reason=""):
 
 
 class RegisterView(APIView):
+    permission_classes = [AllowAny]
     @staticmethod
     def post(request):
         user_serializer = UserSerializer(data=request.data)
@@ -87,6 +91,7 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
     def post(self, request):
         try:
             # refresh_token = request.data.get('refresh')
@@ -120,3 +125,56 @@ class MyCustomBackend(TokenObtainPairView):
                 return user
         except Exception as e:
             return None
+
+
+
+class CurrentUserView(RetrieveAPIView):
+    """
+    获取当前登录用户详细信息
+    """
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        """直接返回通过JWT认证的用户对象"""
+        return self.request.user
+
+
+class UserDetailView(RetrieveAPIView):
+    """
+    获取指定用户信息（管理员权限）
+    """
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrOwnerPermission]
+    lookup_field = 'id'
+
+    def get_permissions(self):
+        """动态权限控制：管理员可查所有用户"""
+        if not self.request.user.is_staff:
+            from .permissions import IsOwnerPermission
+            self.permission_classes += [IsOwnerPermission]
+        return super().get_permissions()
+
+
+class AdminUserListView(ListAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated, IsAdminPermission]
+
+    def list(self, request, *args,  ** kwargs):
+        # 添加管理员专属逻辑
+        return super().list(request, *args, ** kwargs)
+
+class FileUploadView(APIView):
+    #permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser]  # 支持multipart表单数据
+
+    def post(self, request):
+        serializer = FileUploadSerializer(data=request.data, context={'user': request.user})
+        if serializer.is_valid():
+            # 自动关联当前登录用户
+            serializer.save(user=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
