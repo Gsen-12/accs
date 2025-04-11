@@ -9,8 +9,10 @@ https://docs.djangoproject.com/en/5.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
+# import os
 from datetime import datetime, timedelta
 from pathlib import Path
+# import sys
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,6 +31,19 @@ ALLOWED_HOSTS = ['*']
 
 # Application definition
 
+# MEDIA_URL = '/media/'
+# MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+#
+# 允许最大100MB内存文件上传
+DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB
+# 允许最大100MB非内存文件上传
+FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600
+
+# if 'cgi' not in sys.modules:
+#     import legacy_cgi as cgi
+#     sys.modules['cgi'] = cgi
+APPEND_SLASH=False
+
 INSTALLED_APPS = [
     'corsheaders',
     'django.contrib.admin',
@@ -38,7 +53,9 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
-    'accs.apps.AccsConfig'
+    'accs.apps.AccsConfig',
+    'captcha',
+    # 'echartsApp.apps.EchartsConfig',
 ]
 
 MIDDLEWARE = [
@@ -53,10 +70,8 @@ MIDDLEWARE = [
     'accs.utils.middleware.CloseCsrfMiddleware'
 ]
 
-CORS_ALLOWED_ORIGINS = [
-    # "http://localhost:3000",  # 前端开发地址
-    # "http://your-production-domain.com"
-]
+CORS_ALLOWED_ORIGINS = ['http://192.168.101.61:5666',
+                        "http://127.0.0.1:5666"]
 
 CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie
 
@@ -115,6 +130,11 @@ REST_FRAMEWORK = {
     ]
 }
 
+ROLE_IDS = {
+    'tea': 0,
+    'stu': 1
+}
+
 # JWT_AUTH = {
 #     # token有效期为24小时
 #     'JWT_EXPIRATION_DELTA': datetime.timedelta(days=1),
@@ -127,7 +147,7 @@ SIMPLE_JWT = {
     'SIGNING_KEY': SECRET_KEY,
 }
 
-# 跨域支持
+# # 跨域支持
 # CORS_ALLOWED_ORIGINS = [
 #     "http://localhost:3000",
 #     "http://127.0.0.1:3000"
