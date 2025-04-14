@@ -2,9 +2,7 @@ import datetime
 
 from django.contrib.auth import authenticate, get_user_model
 from django.db.models import Q
-from django.forms import model_to_dict
 from django.http import JsonResponse
-from django.template.context_processors import request
 from django_redis import get_redis_connection
 from rest_framework import status
 from rest_framework.permissions import AllowAny
@@ -15,11 +13,11 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 
-from accs import serializers
 from accs.models import Roles, UserInfo
-from accs.serializers import UserSerializer, FileUploadSerializer, UserInfoSerializer
+from accs.permissions import IsSuperAdmin
+from accs.serializers import UserSerializer, FileUploadSerializer, UserInfoSerializer, RolesSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.contrib.auth.decorators import login_required
+
 
 from accs.utils.middleware import UUIDTools
 
@@ -185,7 +183,65 @@ class CurrentUserView(RetrieveAPIView):
         user.token = self.request.headers.get('authorization').replace("Bearer ", "")
         return user # 通过JWT自动解析用户身份
 
-class CurrentRolesView(RetrieveAPIView):
+
+class AdminRoleView(APIView):
+    permission_classes = [IsSuperAdmin]
+
+    # 获取所有角色
+    def get(self, request):
+        roles = Roles.objects.all()
+        serializer = RolesSerializer(roles, many=True)
+        return Response({
+            "code": 200,
+            "data": serializer.data,
+            "message": "success"
+        })
+
+    # 创建角色
+    def post(self, request):
+        serializer = RolesSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "code": 201,
+                "data": serializer.data,
+                "message": "角色创建成功"
+            }, status=status.HTTP_201_CREATED)
+        return Response({
+            "code": 400,
+            "errors": serializer.errors,
+            "message": "验证失败"
+        }, status=400)
+
+class AdminRoleModificationView(APIView):
+    permission_classes = [IsSuperAdmin]
+    # 修改角色
+    def post(self, request):
+        try:
+            role_id = request.data.get('role_id')
+            role = Roles.objects.get(role_id=role_id)
+            serializer = RolesSerializer(role, data=request.data)
+            if not role_id:
+                return Response({"code": 400,
+                                 "message": "缺少角色ID"
+                                 },status=400)
+            if serializer.is_valid():
+                serializer.save()
+                return Response({
+                    "code": 200,
+                    "data": serializer.data,
+                    "message": "角色更新成功"
+                })
+            return Response({
+                "code": 400,
+                "errors": serializer.errors,
+                "message": "验证失败"
+            }, status=400)
+        except Roles.DoesNotExist:
+            return Response({
+                "code": 404,
+                "message": "角色不存在"
+            }, status=404)
 
 
 class FileUploadView(APIView):

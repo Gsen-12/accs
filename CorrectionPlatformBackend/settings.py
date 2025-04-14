@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/5.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
-# import os
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 # import sys
@@ -176,7 +176,33 @@ AUTHENTICATION_BACKENDS = (
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
 
-
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{asctime}] {levelname} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'file': {
+            'level': 'DEBUG',
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'accs/role_audit.log'),
+            'when': 'midnight',
+            'backupCount': 30,
+            'formatter': 'verbose'
+        },
+    },
+    'loggers': {
+        'role_audit': {
+            'handlers': ['file'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+    }
+}
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',

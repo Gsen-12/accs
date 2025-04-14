@@ -1,7 +1,7 @@
 import os
 
 from rest_framework import serializers
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, Permission
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from accs.models import Roles, UserFile, UserInfo
 
@@ -54,15 +54,24 @@ class UserSerializer(serializers.ModelSerializer):
         return value
 
 
-
 class RolesSerializer(serializers.ModelSerializer):
+    permissions = serializers.SlugRelatedField(
+        many=True,
+        slug_field='codename',
+        queryset=Permission.objects.all()
+    )
+
     class Meta:
         model = Roles
-        fields = ['role_id', 'role_name']
+        fields = ['role_id', 'role_name', 'permissions']
+        extra_kwargs = {
+            'role_name': {'validators': []}  # 禁用唯一性验证
+        }
 
-    def create(self, validated_data):
-        role = Roles.objects.create(**validated_data)
-        return role
+    def validate_role_name(self, value):
+        if Roles.objects.filter(role_name=value).exists():
+            raise serializers.ValidationError("角色名称已存在")
+        return value
 
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
