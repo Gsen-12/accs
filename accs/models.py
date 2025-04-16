@@ -46,13 +46,13 @@ class UserFile(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)  # 自动记录上传时间
 
 class UserInfo(models.Model):
-    userId = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,  # 必须设置级联删除
-        primary_key=True,
-        related_name='userinfo'
-    )
-    # userId = models.IntegerField(primary_key=True)
+    # userId = models.OneToOneField(
+    #     User,
+    #     on_delete=models.CASCADE,  # 必须设置级联删除
+    #     primary_key=True,
+    #     related_name='userinfo'
+    # )
+    userId = models.IntegerField(primary_key=True)
     desc = models.TextField(max_length=500, null=True)
     homePath = models.CharField(max_length=100, null=True)
     avatar = models.CharField(max_length=100, null=True)
