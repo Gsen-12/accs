@@ -156,9 +156,14 @@ SIMPLE_JWT = {
 MIDDLEWARE.insert(0, 'corsheaders.middleware.CorsMiddleware')
 
 CACHES = {
-    "default": {
+    'default':{
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": "redis://@127.0.0.1:6379/1",
+        "KEY_PREFIX": "cache"  # 追加前缀双重保险
+    },
+    "token": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://@127.0.0.1:6379/2",
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
             # "PASSWORD": "123456"
@@ -238,5 +243,5 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 MEDIA_URL = '/media/'

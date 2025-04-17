@@ -1,6 +1,10 @@
 import datetime
+import shutil
+import uuid
+from pathlib import Path
 
 from django.contrib.auth import authenticate, get_user_model
+from django.core.files.storage import default_storage
 from django.db.models import Q
 from django.http import JsonResponse
 from django_redis import get_redis_connection
@@ -15,7 +19,8 @@ from rest_framework.permissions import IsAuthenticated
 
 from accs.models import Roles, UserInfo
 from accs.permissions import IsSuperAdmin
-from accs.serializers import UserSerializer, FileUploadSerializer, UserInfoSerializer, RolesSerializer
+from accs.serializers import UserSerializer, FileUploadSerializer, UserInfoSerializer, RolesSerializer, \
+    AvatarUploadSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 
 from accs.utils.middleware import UUIDTools
@@ -96,7 +101,7 @@ class LoginView(APIView):
             refresh_token = str(refresh)
 
             # 存储到Redis
-            redis_conn = get_redis_connection("default")
+            redis_conn = get_redis_connection("token")
             user_id = user.id
 
             # 转换时间单位为整数秒
@@ -150,7 +155,7 @@ class LogoutView(APIView):
 
             # 清理Redis存储
             user_id = request.user.id
-            redis_conn = get_redis_connection("default")
+            redis_conn = get_redis_connection("token")
             redis_conn.delete(f"access_{user_id}", f"refresh_{user_id}")
 
             return Response({"message": "成功登出"}, status=200)
@@ -243,7 +248,7 @@ class PasswordChangeView(APIView):
         user.save()
 
         # 使旧令牌失效（根据你的Redis实现）
-        redis_conn = get_redis_connection("default")
+        redis_conn = get_redis_connection("token")
         redis_conn.delete(f"access_{user.id}", f"refresh_{user.id}")
 
         return Response({"code": 200, "message": "密码修改成功"})
@@ -330,3 +335,58 @@ class FileUploadView(APIView):
             serializer.save(user=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class AvatarUploadView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self,request):
+        serializer = AvatarUploadSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+        user = request.user
+        ext = request.FILES.get('avatar').name.split('.')[-1]
+        filename = f"{uuid.uuid4().hex[:8]}_{user.id}.{ext}"
+        upload_path = f"tmp/avatars/{filename}"
+        try:
+            print( request.FILES['avatar'])
+            default_storage.save(upload_path, request.FILES['avatar'])
+
+            user_info = UserInfo.objects.get(userId=user.id)
+            old_avatar = user_info.avatar
+            user_info.avatar = upload_path
+            user_info.save()
+
+            # 缓存旧头像路径（用于回滚）
+            redis_conn = get_redis_connection("default")
+            redis_conn.setex(
+                name=f"avatar_rollback_{user.id}",
+                time=3600,  # 1小时回滚有效期
+                value=old_avatar.encode('utf-8')
+            )
+
+            return Response({
+                "code": 200,
+                "data": {"avatar_url": f"/media/{upload_path}"},
+                "message": "头像上传成功"
+            })
+        except Exception as e:
+            return Response({
+                "code": 500,
+                "error": f"上传失败：{str(e)}"
+            }, status=500)
+
+
+class AvatarRollbackView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        redis_conn = get_redis_connection("default")
+
+        if old_avatar := redis_conn.get(f"avatar_rollback_{user.id}"):
+            # 执行数据库回滚
+            UserInfo.objects.filter(userId=user.id).update(avatar=old_avatar.decode())
+            return Response({"code": 200, "message": "头像回滚成功"})
+
+        return Response({"code": 404, "message": "无可用回滚版本"}, status=404)

@@ -17,7 +17,7 @@ def delete_token(token):
 
 def add_to_blacklist(token):
     """将令牌加入黑名单"""
-    redis_conn = get_redis_connection("default")
+    redis_conn = get_redis_connection("token")
     try:
         # 计算剩余有效时间
         payload = token.payload
@@ -34,5 +34,5 @@ def add_to_blacklist(token):
 
 def is_blacklisted(token):
     """检查令牌是否在黑名单"""
-    redis_conn = get_redis_connection("default")
+    redis_conn = get_redis_connection("token")
     return redis_conn.exists(f"blacklist_{token}") > 0

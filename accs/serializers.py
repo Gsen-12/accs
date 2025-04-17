@@ -1,7 +1,7 @@
-import os
-
+from django.core.validators import FileExtensionValidator
 from rest_framework import serializers
 from django.contrib.auth.models import User, Permission
+from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from accs.models import Roles, UserFile, UserInfo
 
@@ -99,4 +99,24 @@ class FileUploadSerializer(serializers.ModelSerializer):
             'file': {'write_only': True}
         }
 
+class AvatarUploadSerializer(serializers.Serializer):
+    avatar = serializers.ImageField(
+        allow_empty_file=False,
+        max_length=100,
+        help_text="支持格式：JPEG/PNG，最大5MB",
+        validators=[
+            FileExtensionValidator(allowed_extensions=["jpg", "jpeg", "png"]),
+            # 新增内容类型验证（网页5）
+            lambda value: ValidationError("仅支持JPEG/PNG")
+                        if value.content_type not in ["image/jpeg", "image/png"]
+            else None
+        ]
+    )
 
+    def validate_avatar(self, value):
+        # 文件验证（2MB限制，支持JPG/PNG）
+        if value.size > 2 * 1024 * 1024:
+            raise ValidationError("头像大小不能超过2MB")
+        if value.content_type not in ['image/jpeg', 'image/png']:
+            raise ValidationError("仅支持JPEG/PNG格式")
+        return value
