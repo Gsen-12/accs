@@ -8,7 +8,7 @@ from accs.models import Roles, UserFile, UserInfo
 class UserInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserInfo
-        fields = ['userId', 'desc','homePath','avatar', 'realName', 'role_id']
+        fields = ['userId', 'desc','homePath','avatar', 'realName', 'role_id','gender']
 
     def create(self, validated_data):
         userinfo = UserInfo.objects.create(**validated_data, userId=self.context.get("userId"))
@@ -25,14 +25,18 @@ class UserSerializer(serializers.ModelSerializer):
     realName = serializers.CharField(read_only=True)
     role_id = serializers.IntegerField(read_only=True)
     token = serializers.CharField(read_only=True)
-
+    gender = serializers.IntegerField(read_only=True)
     email = serializers.EmailField(required=True)
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'password', 'email', 'userId','desc','homePath','avatar','realName','role_id', 'token'
+            'id', 'username', 'password', 'email', 'userId','desc','homePath','avatar','realName','role_id', 'token','gender'
         ]
-        extra_kwargs = {'password': {'write_only': True}}
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'id':{'required': False},
+            'role_id': {'required': False}
+        }
 
     # def get_role_id(self, obj):
     #     try:

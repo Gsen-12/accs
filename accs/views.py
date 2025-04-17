@@ -18,7 +18,6 @@ from accs.permissions import IsSuperAdmin
 from accs.serializers import UserSerializer, FileUploadSerializer, UserInfoSerializer, RolesSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 
-
 from accs.utils.middleware import UUIDTools
 
 User = get_user_model()
@@ -36,7 +35,7 @@ class RegisterView(APIView):
 
     @staticmethod
     def post(request):
-        if not {'username', 'password', 'role_id'}.issubset(request.data):
+        if not {'username', 'password', 'role_id','gender'}.issubset(request.data):
             return Response({"message": "缺少必填字段"}, status=400)
         if len(request.data['password']) < 8:
             return Response({"password": "密码长度需至少8位"}, status=400)
@@ -64,14 +63,16 @@ class RegisterView(APIView):
 
             else:
                 return Response(
-                    {"code": 400,"message": "角色ID不能为空", "data": None},
+                    {"code": 400, "message": "角色ID不能为空", "data": None},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
         return Response(user_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
+
     @staticmethod
     def post(request):
         username = request.data.get('username')
@@ -116,8 +117,8 @@ class LoginView(APIView):
 
             return Response({
                 'code': 200,
-                'message':'登录成功',
-                'data':{
+                'message': '登录成功',
+                'data': {
                     'accessToken': access_token
                 }
 
@@ -132,6 +133,7 @@ class LoginView(APIView):
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
+
     def post(self, request):
         try:
             # refresh_token = request.data.get('refresh')
@@ -179,10 +181,72 @@ class CurrentUserView(RetrieveAPIView):
         user.avatar = user_info.avatar
         user.desc = user_info.desc
         user.homePath = user_info.homePath
+        user.gender = user_info.gender
         user.role_id = user_info.role_id
         user.token = self.request.headers.get('authorization').replace("Bearer ", "")
-        return user # 通过JWT自动解析用户身份
+        return user  # 通过JWT自动解析用户身份
 
+
+class UserModificationView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserSerializer
+
+    def post(self, request):
+        user = request.user  # 直接获取当前登录用户
+        user_info = UserInfo.objects.get(userId = user.id)
+
+        if 'email' in request.data:
+            if User.objects.exclude(pk = user.id).filter(email=request.data['email']).exists():
+                return Response({"code": 400, "message": "邮箱已被使用"}, status=400)
+            user.email = request.data['email']
+
+        if'username' in request.data:
+            if User.objects.exclude(pk = user.id).filter(username=request.data['username']).exists():
+                return Response({"code": 400, "message": "用户名已存在"}, status=400)
+            user.username = request.data['username']
+
+            # 更新UserInfo扩展信息
+            user_info_fields = ['realName', 'desc', 'homePath', 'avatar','gender']
+            for field in user_info_fields:
+                if field in request.data:
+                    setattr(user_info, field, request.data[field])
+            user.save()
+            user_info.save()
+
+            return Response({
+                "code": 200,
+                "data": {
+                    "username": user.username,
+                    "realName": user_info.realName,
+                    "avatar": user_info.avatar,
+                    "gender": user_info.gender
+                },
+                "message": "信息更新成功"
+            })
+
+
+class PasswordChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+
+        if not user.check_password(old_password):  # 验证原密码
+            return Response({"code": 400, "message": "原密码错误"}, status=400)
+
+        if len(new_password) < 8:
+            return Response({"code": 400, "message": "新密码长度需至少8位"}, status=400)
+
+        user.set_password(new_password)  # 安全更新密码
+        user.save()
+
+        # 使旧令牌失效（根据你的Redis实现）
+        redis_conn = get_redis_connection("default")
+        redis_conn.delete(f"access_{user.id}", f"refresh_{user.id}")
+
+        return Response({"code": 200, "message": "密码修改成功"})
 
 class AdminRoleView(APIView):
     permission_classes = [IsSuperAdmin]
@@ -213,8 +277,10 @@ class AdminRoleView(APIView):
             "message": "验证失败"
         }, status=400)
 
+
 class AdminRoleModificationView(APIView):
     permission_classes = [IsSuperAdmin]
+
     # 修改角色
     def post(self, request):
         try:
@@ -224,7 +290,7 @@ class AdminRoleModificationView(APIView):
             if not role_id:
                 return Response({"code": 400,
                                  "message": "缺少角色ID"
-                                 },status=400)
+                                 }, status=400)
             if serializer.is_valid():
                 serializer.save()
                 return Response({
@@ -248,6 +314,7 @@ class FileUploadView(APIView):
     #permission_classes = [IsAuthenticated]
     permission_classes = [AllowAny]
     parser_classes = [MultiPartParser, FormParser]  # 支持multipart表单数据
+
     # max_upload_size = 104857600  # 100MB
     # def handle_exception(self, exc):
     #     if isinstance(exc, serializers.ValidationError):

@@ -70,7 +70,7 @@ MIDDLEWARE = [
     'accs.utils.middleware.CloseCsrfMiddleware'
 ]
 
-CORS_ALLOWED_ORIGINS = ['http://192.168.101.61:5666',
+CORS_ALLOWED_ORIGINS = ['http://192.168.101.57:5666',
                         "http://127.0.0.1:5666"]
 
 CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie

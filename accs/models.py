@@ -55,6 +55,7 @@ class UserInfo(models.Model):
     userId = models.IntegerField(primary_key=True)
     desc = models.TextField(max_length=500, null=True)
     homePath = models.CharField(max_length=100, null=True)
-    avatar = models.CharField(max_length=100, null=True)
+    avatar = models.CharField(max_length=255, null=True, default='avatars/default.png')
     realName = models.CharField(max_length=100, null=True)
     role_id = models.IntegerField(null=False)
+    gender = models.IntegerField(null=False)
