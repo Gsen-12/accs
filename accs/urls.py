@@ -4,7 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg import openapi
 # from drf_yasg.views import get_schema_view
 from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
-    UserModificationView, PasswordChangeView, AvatarUploadView, AvatarRollbackView
+    UserModificationView, PasswordChangeView, AvatarUploadView, AvatarRollbackView, AvatarChangeView, AvatarConfirmView
 from django.conf import settings
 from django.conf.urls.static import static
 from accs.views import FileUploadView
@@ -39,6 +39,8 @@ urlpatterns = [
     # path('swagger/', schema_view.with_ui('swagger', cache_timeout=0)),
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', AvatarUploadView.as_view(), name='avatar-upload'),
+    path('avatar/change/', AvatarChangeView.as_view(), name='avatar-upload'),
+    path('avatar/confirm/', AvatarConfirmView.as_view(), name='avatar-upload'),
     path('avatar/rollback/', AvatarRollbackView.as_view(), name='avatar-rollback'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

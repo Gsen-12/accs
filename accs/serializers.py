@@ -4,8 +4,58 @@ from django.contrib.auth.models import User, Permission
 from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from accs.models import Roles, UserFile, UserInfo
+from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
+from PIL import Image
+import io
+
+def validate_image_content(value):
+    """
+    深度验证图像文件内容（安全增强）
+    功能：
+    1. 验证文件头合法性
+    2. 检测图像文件损坏
+    3. 限制最大尺寸
+    """
+    try:
+        # --- 验证1：文件头检查 ---
+        value.seek(0)
+        header = value.read(4)
+        if not header.startswith((b'\xff\xd8\xff', b'\x89PNG')):
+            raise ValidationError("非标准JPEG/PNG文件头")
+        value.seek(0)
+
+        # --- 验证2：Pillow格式验证 ---
+        img = Image.open(value)
+        img.verify()  # 检测文件完整性
+
+        # --- 验证3：尺寸限制 ---
+        value.seek(0)
+        img = Image.open(value)
+        if max(img.size) > 5000:  # 限制最大边长
+            raise ValidationError("图片尺寸超过5000px限制")
+        value.seek(0)
+
+        return value
+    except IOError as e:
+        raise ValidationError(f"图像文件损坏: {str(e)}")
+    except Exception as e:
+        raise ValidationError(f"非法图像内容: {str(e)}")
+    finally:
+        if hasattr(value, 'seekable') and value.seekable():
+            value.seek(0)  # 确保文件指针重置
+
 
 class UserInfoSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(
+        write_only=True,
+        required=False,
+        validators=[
+            FileExtensionValidator(allowed_extensions=['jpg', 'jpeg', 'png']),
+            validate_image_content  # 直接引用验证函数
+        ]
+    )
+
     class Meta:
         model = UserInfo
         fields = ['userId', 'desc','homePath','avatar', 'realName', 'role_id','gender']
@@ -16,6 +66,16 @@ class UserInfoSerializer(serializers.ModelSerializer):
 
     def get(self):
         return self.data.items()
+
+    def validate_image_content(value):
+        # 验证实际文件内容（防止伪扩展名攻击）
+        from PIL import Image
+        try:
+            img = Image.open(value)
+            img.verify()
+        except Exception as e:
+            raise serializers.ValidationError("非法的图像文件内容")
+        return value
 
 class UserSerializer(serializers.ModelSerializer):
     userId = serializers.IntegerField(read_only=True)

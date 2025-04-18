@@ -159,7 +159,10 @@ CACHES = {
     'default':{
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": "redis://@127.0.0.1:6379/1",
-        "KEY_PREFIX": "cache"  # 追加前缀双重保险
+        "KEY_PREFIX": "cache",  # 追加前缀双重保险
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
     },
     "token": {
         "BACKEND": "django_redis.cache.RedisCache",
@@ -245,3 +248,7 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 MEDIA_URL = '/media/'
+
+TEMP_AVATAR_DIR = 'tmp/avatars'
+FINAL_AVATAR_DIR = 'avatars'
+AVATAR_ROLLBACK_TTL = 86400  # 回滚有效期24小时

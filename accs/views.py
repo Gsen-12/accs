@@ -1,7 +1,7 @@
 import datetime
-import shutil
+import os
+import time
 import uuid
-from pathlib import Path
 
 from django.contrib.auth import authenticate, get_user_model
 from django.core.files.storage import default_storage
@@ -9,6 +9,7 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django_redis import get_redis_connection
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,10 +18,11 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 
+from CorrectionPlatformBackend import settings
 from accs.models import Roles, UserInfo
 from accs.permissions import IsSuperAdmin
 from accs.serializers import UserSerializer, FileUploadSerializer, UserInfoSerializer, RolesSerializer, \
-    AvatarUploadSerializer
+    AvatarUploadSerializer, validate_image_content
 from rest_framework.parsers import MultiPartParser, FormParser
 
 from accs.utils.middleware import UUIDTools
@@ -31,8 +33,6 @@ User = get_user_model()
 def csrf_failure(request, reason=""):
     return JsonResponse({"error": "CSRF验证失败"}, status=403)
 
-
-# Create your views here.
 
 
 class RegisterView(APIView):
@@ -64,7 +64,6 @@ class RegisterView(APIView):
                         },
                         "message": "注册成功"
                     }, status=status.HTTP_201_CREATED)
-                    # return Response(user_serializer.data, status=status.HTTP_201_CREATED)
 
             else:
                 return Response(
@@ -82,7 +81,6 @@ class LoginView(APIView):
     def post(request):
         username = request.data.get('username')
         password = request.data.get('password')
-        # userinfo_serializer = UserInfoSerializer(data=request.data)
         user = authenticate(username=username, password=password)
         # role = UserInfo.objects.get(user_id=user.id)
         if not user:
@@ -91,8 +89,6 @@ class LoginView(APIView):
                 "message": "用户名或密码错误",
                 "result": None
             }, status=status.HTTP_200_OK)  # Vben通常接受200带错误码
-            # return Response({'code': 401, 'msg': '认证失败'})
-            # return Response({"error": "无效的凭证"}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
             # 生成双令牌
@@ -133,7 +129,6 @@ class LoginView(APIView):
             return Response({
                 "error": f"令牌生成失败: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            # return Response({"error": f"令牌生成失败: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class LogoutView(APIView):
@@ -141,19 +136,12 @@ class LogoutView(APIView):
 
     def post(self, request):
         try:
-            # refresh_token = request.data.get('refresh')
-            # access_token = request.auth
-            #
 
             if not request.auth:
                 return Response({"error": "未登录"}, status=400)
-            # # 加入黑名单
-            # add_to_blacklist(access_token)
-            # add_to_blacklist(RefreshToken(refresh_token))
 
             print(type(request))
 
-            # 清理Redis存储
             user_id = request.user.id
             redis_conn = get_redis_connection("token")
             redis_conn.delete(f"access_{user_id}", f"refresh_{user_id}")
@@ -163,7 +151,6 @@ class LogoutView(APIView):
             return Response({"error": str(e)}, status=400)
 
 
-# MyCustomBackend
 class MyCustomBackend(TokenObtainPairView):
     def authenticate(self, request, username=None, password=None, **kwargs):
         try:
@@ -229,6 +216,59 @@ class UserModificationView(APIView):
                 "message": "信息更新成功"
             })
 
+class AvatarChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]  # 允许文件上传[8](@ref)
+
+    def post(self, request):
+        user = request.user
+        user_info = UserInfo.objects.get(userId=user.id)
+        redis_conn = get_redis_connection("default")
+        temp_path = None
+        response_data = {"code": 200, "message": "信息更新成功"}
+        try:
+            if 'avatar' in request.FILES:
+                uploaded_file = request.FILES['avatar']
+
+                try:
+                    validate_image_content(uploaded_file)  # 调用自定义验证
+                except ValidationError as e:
+                    return Response({
+                        "code": 415,
+                        "error": f"文件验证失败: {e.detail[0]}"
+                    }, status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+                # 生成唯一临时路径（示例：tmp/avatars/temp_89ab3c_123.jpg）
+                ext = uploaded_file.name.split('.')[-1]
+                temp_filename = f"temp_{uuid.uuid4().hex[:6]}_{user.id}.{ext}"
+                temp_path = default_storage.save(
+                    os.path.join(settings.TEMP_AVATAR_DIR, temp_filename),
+                    uploaded_file
+                )
+
+                # 缓存临时文件信息（有效期1小时）
+                redis_conn.hmset(
+                    f"avatar_temp_{user.id}",
+                    {
+                        'temp_path': temp_path,
+                        'final_path': f"{settings.FINAL_AVATAR_DIR}/{user.id}_{int(time.time())}.{ext}",
+                        'expire': str(int(time.time()) + 3600)
+                    }
+                )
+                response_data["preview_url"] = f"/media/{temp_path}"  # 关键点3：动态添加字段
+                response_data["message"] = "基本信息已更新，头像修改待确认"
+
+                user.save()
+                user_info.save()
+
+                return Response(response_data)
+
+        except Exception as e:
+            if temp_path and default_storage.exists(temp_path):
+                default_storage.delete(temp_path)
+            return Response({
+                "code": 500,
+                "error": f"服务器错误: {str(e)}"
+            }, status=500)
 
 class PasswordChangeView(APIView):
     permission_classes = [IsAuthenticated]
@@ -376,6 +416,59 @@ class AvatarUploadView(APIView):
                 "error": f"上传失败：{str(e)}"
             }, status=500)
 
+
+class AvatarConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        redis_conn = get_redis_connection("default")
+        cache_key = f"avatar_temp_{user.id}"
+
+        # 验证缓存有效性
+        if not redis_conn.exists(cache_key):
+            return Response({"code": 404, "message": "无待确认的头像"}, status=404)
+
+        cache_data = redis_conn.hgetall(cache_key)
+        temp_path = cache_data[b'temp_path'].decode()
+        final_path = cache_data[b'final_path'].decode()
+
+        try:
+            # 移动文件到正式目录
+            with default_storage.open(temp_path) as src_file:
+                default_storage.save(final_path, src_file)
+
+            # 更新数据库记录
+            user_info = UserInfo.objects.get(userId=user.id)
+            old_avatar = user_info.avatar
+            user_info.avatar = final_path
+            user_info.save()
+
+            # 清理缓存和临时文件
+            redis_conn.delete(cache_key)
+            default_storage.delete(temp_path)
+
+            # 保存旧头像回滚点（参考网页6缓存策略）
+            if old_avatar.startswith(settings.FINAL_AVATAR_DIR):
+                redis_conn.setex(
+                    f"avatar_rollback_{user.id}",
+                    settings.AVATAR_ROLLBACK_TTL,
+                    old_avatar
+                )
+
+            return Response({
+                "code": 200,
+                "avatar_url": f"/media/{final_path}",
+                "message": "头像更新成功"
+            })
+
+        except Exception as e:
+            # 事务回滚（参考网页5错误处理）
+            default_storage.delete(final_path)
+            return Response({
+                "code": 500,
+                "error": f"确认失败：{str(e)}"
+            }, status=500)
 
 class AvatarRollbackView(APIView):
     permission_classes = [IsAuthenticated]
