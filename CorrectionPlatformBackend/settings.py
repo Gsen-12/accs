@@ -252,3 +252,9 @@ MEDIA_URL = '/media/'
 TEMP_AVATAR_DIR = 'tmp/avatars'
 FINAL_AVATAR_DIR = 'avatars'
 AVATAR_ROLLBACK_TTL = 86400  # 回滚有效期24小时
+
+TEMP_FILE_DIR = 'tmp/files'  # 临时存储目录
+FINAL_FILE_DIR = 'files'     # 正式存储目录
+FILE_ROLLBACK_TTL = 86400    # 文件回滚有效期(24小时)
+MAX_FILE_SIZE = 104857600    # 100MB文件大小限制
+ALLOWED_FILE_TYPES = ['pdf', 'docx', 'xlsx']  # 允许的文件类型

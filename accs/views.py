@@ -19,7 +19,7 @@ from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from CorrectionPlatformBackend import settings
-from accs.models import Roles, UserInfo
+from accs.models import Roles, UserInfo, UserFile
 from accs.permissions import IsSuperAdmin
 from accs.serializers import UserSerializer, FileUploadSerializer, UserInfoSerializer, RolesSerializer, \
     AvatarUploadSerializer, validate_image_content
@@ -356,25 +356,98 @@ class AdminRoleModificationView(APIView):
 
 
 class FileUploadView(APIView):
-    #permission_classes = [IsAuthenticated]
-    permission_classes = [AllowAny]
-    parser_classes = [MultiPartParser, FormParser]  # 支持multipart表单数据
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
 
-    # max_upload_size = 104857600  # 100MB
-    # def handle_exception(self, exc):
-    #     if isinstance(exc, serializers.ValidationError):
-    #         return Response(
-    #             {"error": "文件验证失败", "detail": exc.detail},
-    #             status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
-    #         )
-    #     return super().handle_exception(exc)
     def post(self, request):
-        serializer = FileUploadSerializer(data=request.data, context={'user': request.user})
-        if serializer.is_valid():
-            # 自动关联当前登录用户
-            serializer.save(user=request.user)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        """分阶段上传文件到临时目录"""
+        try:
+            uploaded_file = request.FILES['file']
+
+            # 文件验证
+            if uploaded_file.size > settings.MAX_FILE_SIZE:
+                return Response({"error": "文件大小超过100MB限制"}, status=413)
+
+            ext = uploaded_file.name.split('.')[-1].lower()
+            if ext not in settings.ALLOWED_FILE_TYPES:
+                return Response({"error": "不支持的文件类型"}, status=415)
+
+            # 生成临时存储路径
+            temp_filename = f"temp_{uuid.uuid4().hex[:8]}_{request.user.id}.{ext}"
+            temp_path = default_storage.save(
+                os.path.join(settings.TEMP_FILE_DIR, temp_filename),
+                uploaded_file
+            )
+
+            # Redis缓存文件信息
+            redis_conn = get_redis_connection("default")
+            redis_key = f"file_temp_{request.user.id}"
+            redis_conn.hmset(redis_key, {
+                'temp_path': temp_path,
+                'original_name': uploaded_file.name,
+                'expire': str(int(time.time()) + 3600)  # 1小时有效期
+            })
+
+            return Response({
+                "code": 200,
+                "preview_url": f"/media/{temp_path}",
+                "message": "文件已暂存，请确认提交"
+            })
+
+        except KeyError:
+            return Response({"error": "未接收到文件"}, status=400)
+
+class FileConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """将临时文件转为正式存储"""
+        temp_path=None
+        user = request.user
+        redis_conn = get_redis_connection("default")
+        cache_key = f"file_temp_{user.id}"
+
+        if not redis_conn.exists(cache_key):
+            return Response({"code": 404, "message": "无待确认的文件"}, status=404)
+
+        cache_data = redis_conn.hgetall(cache_key)
+        try:
+            temp_path = cache_data[b'temp_path'].decode()
+            original_name = cache_data[b'original_name'].decode()
+
+            # 创建正式存储路径（网页1）
+            final_filename = f"{uuid.uuid4().hex[:8]}_{original_name}"
+            final_path = os.path.join(settings.FINAL_FILE_DIR, final_filename)
+
+            # 移动文件（网页4）
+            with default_storage.open(temp_path) as src_file:
+                saved_path = default_storage.save(final_path, src_file)
+
+            # 创建数据库记录
+            UserFile.objects.create(
+                user=user,
+                file=saved_path,
+                is_temporary=False,
+                original_name=original_name
+            )
+
+            # 清理缓存和临时文件
+            redis_conn.delete(cache_key)
+            default_storage.delete(temp_path)
+
+            return Response({
+                "code": 200,
+                "file_url": f"/media/{saved_path}",
+                "message": "文件已正式保存"
+            })
+
+        except Exception as e:
+            if temp_path and default_storage.exists(temp_path):
+                default_storage.delete(temp_path)
+            return Response({
+                "code": 500,
+                "error": f"文件确认失败：{str(e)}"
+            }, status=500)
 
 class AvatarUploadView(APIView):
     permission_classes = [IsAuthenticated]
@@ -481,5 +554,4 @@ class AvatarRollbackView(APIView):
             # 执行数据库回滚
             UserInfo.objects.filter(userId=user.id).update(avatar=old_avatar.decode())
             return Response({"code": 200, "message": "头像回滚成功"})
-
         return Response({"code": 404, "message": "无可用回滚版本"}, status=404)

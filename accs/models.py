@@ -2,6 +2,8 @@ from django.contrib.auth.models import AbstractUser, User
 from django.db import models
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from CorrectionPlatformBackend import settings
+
 
 # Create your models here.
 
@@ -38,10 +40,17 @@ class BlacklistedToken(models.Model):
         refresh = RefreshToken(token)
         cls.objects.create(token=str(refresh))
 
+
 class UserFile(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     file = models.FileField(upload_to='uploads/%Y/%m/%d/')
-    uploaded_at = models.DateTimeField(auto_now_add=True)  # 自动记录上传时间
+    # 新增字段
+    is_temporary = models.BooleanField(default=True)
+    original_name = models.CharField(max_length=255)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def get_final_path(self):
+        return f"{settings.FINAL_FILE_DIR}/{self.original_name}"
 
 class UserInfo(models.Model):
     # userId = models.OneToOneField(
@@ -56,4 +65,5 @@ class UserInfo(models.Model):
     avatar = models.CharField(max_length=255, null=True, default='avatars/default.png')
     realName = models.CharField(max_length=100, null=True)
     role_id = models.IntegerField(null=False)
-    gender = models.IntegerField(null=False)
+    GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
+    gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)

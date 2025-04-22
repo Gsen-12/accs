@@ -4,7 +4,8 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg import openapi
 # from drf_yasg.views import get_schema_view
 from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
-    UserModificationView, PasswordChangeView, AvatarUploadView, AvatarRollbackView, AvatarChangeView, AvatarConfirmView
+    UserModificationView, PasswordChangeView, AvatarUploadView, AvatarRollbackView, AvatarChangeView, AvatarConfirmView, \
+    FileConfirmView
 from django.conf import settings
 from django.conf.urls.static import static
 from accs.views import FileUploadView
@@ -35,12 +36,13 @@ urlpatterns = [
     path('admin/roles/<int:role_id>/', AdminRoleView.as_view(), name='admin-role-detail'),
     # path('user/', UserDetailView.as_view(), name='user-detail'),
     # path('users/', AdminUserListView.as_view(), name='admin-users'),
-    path('user_upload/', FileUploadView.as_view(), name='user_upload'),
     # path('swagger/', schema_view.with_ui('swagger', cache_timeout=0)),
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', AvatarUploadView.as_view(), name='avatar-upload'),
     path('avatar/change/', AvatarChangeView.as_view(), name='avatar-upload'),
     path('avatar/confirm/', AvatarConfirmView.as_view(), name='avatar-upload'),
     path('avatar/rollback/', AvatarRollbackView.as_view(), name='avatar-rollback'),
+    path('file/upload/', FileUploadView.as_view(), name='file-upload'),
+    path('file/confirm/', FileConfirmView.as_view(), name='file-confirm'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
