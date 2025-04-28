@@ -13,7 +13,6 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 # import sys
-
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -71,7 +70,8 @@ MIDDLEWARE = [
 ]
 
 CORS_ALLOWED_ORIGINS = ['http://192.168.101.57:5666',
-                        "http://127.0.0.1:5666"]
+                        "http://127.0.0.1:5666",
+                        'http://192.168.101.69:3000']
 
 CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie
 
@@ -257,4 +257,22 @@ TEMP_FILE_DIR = 'tmp/files'  # 临时存储目录
 FINAL_FILE_DIR = 'files'     # 正式存储目录
 FILE_ROLLBACK_TTL = 86400    # 文件回滚有效期(24小时)
 MAX_FILE_SIZE = 104857600    # 100MB文件大小限制
-ALLOWED_FILE_TYPES = ['pdf', 'docx', 'xlsx']  # 允许的文件类型
+ALLOWED_FILE_TYPES = ['pdf', 'docx', 'xlsx',"py"]  # 允许的文件类型
+DIFY_API_KEY = os.getenv('app-uMcRADhYaBLnJCbByBIsjG8r')
+
+DIFY_UPLOAD_URL = "https://192.168.101.69/v1/chat-messages"
+
+SEAFILE_CONFIG = {
+    'API_BASE': 'https://seafile.accs.rabbitmind.net',  # Seafile服务地址
+    'API_TOKEN': 'b9493568a48c5d8c6bcf3fe83d89eefd9177d257',         # 管理员API令牌
+    'AVATAR_REPO_ID': 'ad457d57-2577-4686-89b7-4f69c8a5195c',       # 专门存储头像的文件库ID
+    'UPLOAD_URL': '/api2/repos/{repo_id}/upload-link/',
+    'FILE_URL_TEMPLATE': '{repo_id}/files?p=/{file_path}',  # 需在代码中传入实际 repo_id
+    # 'AVATAR_DIR' : '/ava'  # 存储目录
+}
+
+# 新增Seafile配置
+# SEAFILE_API_URL = '/api2/repos/{ad457d57-2577-4686-89b7-4f69c8a5195c}/upload-link/'
+# SEAFILE_API_TOKEN = 'b9493568a48c5d8c6bcf3fe83d89eefd9177d257'  # 从Seafile后台获取
+# SEAFILE_REPO_ID = 'ad457d57-2577-4686-89b7-4f69c8a5195c'  # 头像存储的仓库ID
+# SEAFILE_AVATAR_DIR = '/avatars'  # 存储目录

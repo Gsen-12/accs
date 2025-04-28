@@ -4,11 +4,13 @@ import time
 import uuid
 
 from django.contrib.auth import authenticate, get_user_model
+from django.contrib.sites import requests
 from django.core.files.storage import default_storage
 from django.db.models import Q
 from django.http import JsonResponse
 from django_redis import get_redis_connection
-from rest_framework import status
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -19,13 +21,14 @@ from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from CorrectionPlatformBackend import settings
-from accs.models import Roles, UserInfo, UserFile
+from accs.models import Roles, UserInfo, UserFile, Class
 from accs.permissions import IsSuperAdmin
-from accs.serializers import UserSerializer, FileUploadSerializer, UserInfoSerializer, RolesSerializer, \
-    AvatarUploadSerializer, validate_image_content
+from accs.serializers import UserSerializer, UserInfoSerializer, RolesSerializer, \
+    AvatarUploadSerializer, validate_image_content, ClassCreateSerializer, AssignStudentSerializer, ClassSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
-
+import requests
 from accs.utils.middleware import UUIDTools
+
 
 User = get_user_model()
 
@@ -160,6 +163,55 @@ class MyCustomBackend(TokenObtainPairView):
         except Exception as e:
             return None
 
+
+class ClassViewSet(viewsets.ModelViewSet):
+    queryset = Class.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ClassCreateSerializer
+        return ClassSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def my_classes(self, request):
+        """获取当前教师创建的班级"""
+        classes = Class.objects.filter(created_by=request.user)
+        serializer = self.get_serializer(classes, many=True)
+        return Response(serializer.data)
+
+
+class ClassAssignmentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = AssignStudentSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        classroom = serializer.validated_data['class_id']
+        student_ids = serializer.validated_data['student_ids']
+
+        # 验证教师权限
+        if classroom.created_by != request.user:
+            return Response({
+                "code": 403,
+                "message": "无权操作其他教师的班级"
+            }, status=403)
+
+        # 批量关联学生
+        students = User.objects.filter(id__in=student_ids)
+        classroom.students.add(*students)
+
+        return Response({
+            "code": 200,
+            "message": f"成功添加{len(students)}名学生"
+        })
 
 class CurrentUserView(RetrieveAPIView):
     serializer_class = UserSerializer
@@ -449,6 +501,69 @@ class FileConfirmView(APIView):
                 "error": f"文件确认失败：{str(e)}"
             }, status=500)
 
+    def put(self, request):
+        url = 'http://192.168.101.69/v1/chat-messages'
+        api_key = 'app-uMcRADhYaBLnJCbByBIsjG8r'
+
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+        data = {
+            "inputs": {},
+            "query": "你好",  # 用户输入内容
+            "response_mode": "streaming",  # 流式响应模式
+            "user": "user-123",  # 用户唯一标识
+            "conversation_id": ""  # 会话ID（支持连续对话）
+        }
+
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            try:
+                print("响应内容:", response.json().get('answer'))
+            except requests.exceptions.JSONDecodeError:
+                print("响应非JSON格式:", response.text)
+                return Response({
+                    "code": 200,
+                    "response": response.text,
+                })
+        else:
+            print(f"请求失败[状态码{response.status_code}]:", response.text)
+            return Response(
+                f"请求失败[状态码{response.status_code}]:",
+                            )
+
+    def get(self, request):
+        url = 'http://192.168.101.69/v1/chat-messages'
+        api_key = 'app-uMcRADhYaBLnJCbByBIsjG8r'
+
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+        data = {
+            "inputs": {},
+            "query": "你好",  # 用户输入内容
+            "response_mode": "streaming",  # 流式响应模式
+            "user": "user-123",  # 用户唯一标识
+            "conversation_id": ""  # 会话ID（支持连续对话）
+        }
+
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            try:
+                print("响应内容:", response.json().get('answer'))
+            except requests.exceptions.JSONDecodeError:
+                print("响应非JSON格式:", response.text)
+                return Response({
+                    "code": 200,
+                    "response": response.text,
+                })
+        else:
+            print(f"请求失败[状态码{response.status_code}]:", response.text)
+            return Response(
+                f"请求失败[状态码{response.status_code}]:",
+            )
 class AvatarUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]

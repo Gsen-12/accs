@@ -48,9 +48,35 @@ class UserFile(models.Model):
     is_temporary = models.BooleanField(default=True)
     original_name = models.CharField(max_length=255)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    seafile_file_id = models.CharField(max_length=100, unique=True)  # 新增Seafile文件ID
+    file_hash = models.CharField(max_length=64)  # SHA256哈希值
+
+    def get_seafile_url(self):
+        """生成文件访问链接"""
+        return f"{settings.SEAFILE_API_URL}/files/{self.seafile_file_id}/download"
 
     def get_final_path(self):
         return f"{settings.FINAL_FILE_DIR}/{self.original_name}"
+
+class Class(models.Model):
+    class_id = models.AutoField(primary_key=True)
+    class_name = models.CharField(max_length=100, unique=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='created_classes'
+    )
+    students = models.ManyToManyField(
+        User,
+        related_name='student_classes',
+        limit_choices_to={'userinfo__role_id': 1}  # 仅允许关联学生
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "班级"
+        verbose_name_plural = "班级"
+        unique_together = ('class_name', 'created_by')  # 同教师下班级名不可重复
 
 class UserInfo(models.Model):
     # userId = models.OneToOneField(
@@ -67,3 +93,26 @@ class UserInfo(models.Model):
     role_id = models.IntegerField(null=False)
     GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
     gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
+    classes = models.ManyToManyField(
+        Class,
+        through='ClassMembership',  # 关键点1：明确指定中间模型
+        through_fields=('user_info', 'classroom'),  # 关键点2：声明关联字段
+        related_name='members'
+    )
+class ClassMembership(models.Model):
+    # 关键点3：正确的外键命名和关联
+    user_info = models.ForeignKey(
+        UserInfo,
+        on_delete=models.CASCADE,
+        related_name='class_relations'  # 自定义反向关联名
+    )
+    classroom = models.ForeignKey(
+        Class,
+        on_delete=models.CASCADE,
+        related_name='student_relations'  # 自定义反向关联名
+    )
+    join_date = models.DateField(auto_now_add=True)
+
+    class Meta:
+        # 确保唯一性约束
+        unique_together = ('user_info', 'classroom')

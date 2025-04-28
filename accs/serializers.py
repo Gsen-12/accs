@@ -1,13 +1,10 @@
 from django.core.validators import FileExtensionValidator
-from rest_framework import serializers
 from django.contrib.auth.models import User, Permission
-from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from accs.models import Roles, UserFile, UserInfo
+from accs.models import Roles, UserFile, UserInfo, Class
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from PIL import Image
-import io
 
 def validate_image_content(value):
     """
@@ -180,3 +177,50 @@ class AvatarUploadSerializer(serializers.Serializer):
         if value.content_type not in ['image/jpeg', 'image/png']:
             raise ValidationError("仅支持JPEG/PNG格式")
         return value
+
+class ClassSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.CharField(source='created_by.username', read_only=True)
+    student_count = serializers.IntegerField(source='students.count', read_only=True)
+
+    class Meta:
+        model = Class
+        fields = ['class_id', 'class_name', 'teacher_name', 'student_count', 'created_at']
+        extra_kwargs = {
+            'created_by': {'write_only': True}
+        }
+
+
+class ClassCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Class
+        fields = ['class_name']
+
+    def validate_class_name(self, value):
+        user = self.context['request'].user
+        if Class.objects.filter(class_name=value, created_by=user).exists():
+            raise serializers.ValidationError("您已创建过同名班级")
+        return value
+
+
+class AssignStudentSerializer(serializers.Serializer):
+    student_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        min_length=1
+    )
+    class_id = serializers.IntegerField()
+
+    def validate_student_ids(self, value):
+        # 验证学生是否存在且角色正确
+        students = User.objects.filter(
+            id__in=[1,2],
+            userinfo__role_id=1
+        )
+        if len(students) != len(value):
+            raise serializers.ValidationError("包含无效学生ID")
+        return value
+
+    def validate_class_id(self, value):
+        try:
+            return Class.objects.get(class_id=value)
+        except Class.DoesNotExist:
+            raise serializers.ValidationError("班级不存在")

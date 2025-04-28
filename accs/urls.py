@@ -5,15 +5,15 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg.views import get_schema_view
 from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
     UserModificationView, PasswordChangeView, AvatarUploadView, AvatarRollbackView, AvatarChangeView, AvatarConfirmView, \
-    FileConfirmView
+    FileConfirmView, ClassAssignmentView, ClassViewSet
 from django.conf import settings
 from django.conf.urls.static import static
 from accs.views import FileUploadView
 # from accs.views import AdminUserListView
 
 router = DefaultRouter()
+router.register(r'classes', ClassViewSet, basename='class')
 # router.register(r'XXXX', XXXXX)
-
 # schema_view = get_schema_view(
 #     openapi.Info(
 #         title="API文档",
@@ -44,5 +44,8 @@ urlpatterns = [
     path('avatar/rollback/', AvatarRollbackView.as_view(), name='avatar-rollback'),
     path('file/upload/', FileUploadView.as_view(), name='file-upload'),
     path('file/confirm/', FileConfirmView.as_view(), name='file-confirm'),
+    # path('call/dify/',DifyView.as_view(),name='call-dify'),
+    path('classes/my/', ClassViewSet.as_view({'get': 'my_classes'})),
+    path('assign/', ClassAssignmentView.as_view()),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
