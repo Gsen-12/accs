@@ -1,11 +1,9 @@
 import datetime
+import json
 import os
-import time
-import uuid
+import tempfile
 
 from django.contrib.auth import authenticate, get_user_model
-from django.contrib.sites import requests
-from django.core.files.storage import default_storage
 from django.db.models import Q
 from django.http import JsonResponse
 from django_redis import get_redis_connection
@@ -19,16 +17,17 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
+from seafileapi import SeafileAPI
 
 from CorrectionPlatformBackend import settings
+from CorrectionPlatformBackend.settings import repo_id, login_name, server_url, pwd
 from accs.models import Roles, UserInfo, UserFile, Class
 from accs.permissions import IsSuperAdmin
 from accs.serializers import UserSerializer, UserInfoSerializer, RolesSerializer, \
-    AvatarUploadSerializer, validate_image_content, ClassCreateSerializer, AssignStudentSerializer, ClassSerializer
+     validate_image_content, ClassCreateSerializer, AssignStudentSerializer, ClassSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 import requests
 from accs.utils.middleware import UUIDTools
-
 
 User = get_user_model()
 
@@ -139,7 +138,6 @@ class LogoutView(APIView):
 
     def post(self, request):
         try:
-
             if not request.auth:
                 return Response({"error": "未登录"}, status=400)
 
@@ -227,30 +225,81 @@ class CurrentUserView(RetrieveAPIView):
         user.homePath = user_info.homePath
         user.gender = user_info.gender
         user.role_id = user_info.role_id
+        user.repo_id = user_info.repo_id
         user.token = self.request.headers.get('authorization').replace("Bearer ", "")
         return user  # 通过JWT自动解析用户身份
-
 
 class UserModificationView(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = UserSerializer
-
     def post(self, request):
-        user = request.user  # 直接获取当前登录用户
+        user = request.user
         user_info = UserInfo.objects.get(userId = user.id)
+        redis_conn = get_redis_connection("default")
+        user_serializer = UserSerializer
+        seafile_file_uploaded = False
 
-        if 'email' in request.data:
-            if User.objects.exclude(pk = user.id).filter(email=request.data['email']).exists():
-                return Response({"code": 400, "message": "邮箱已被使用"}, status=400)
-            user.email = request.data['email']
+        try:
+            if user_info.avatar == request.data['avatar'] \
+                    and user_info.realName == request.data['realName'] \
+                    and user_info.gender == request.data['gender']:
+                    return Response({
+                        "code": 406,
+                        "data": {
+                            "username": user.username,
+                            "realName": user_info.realName,
+                            "avatar": user_info.avatar,
+                            "gender": user_info.gender
+                        },
+                        "message": "没有任何修改请检查!"
+                    })
+            if 'avatar' in request.FILES:
+                seafile_api = SeafileAPI(login_name,pwd,server_url)
+                avatar_file = request.FILES['avatar']
+                try:
+                    validate_image_content(avatar_file)  # 自定义验证函数
+                except ValidationError as e:
+                    return Response({
+                        "code": 415,
+                        "error": f"文件验证失败: {e.detail[0]}"
+                    }, status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
 
-        if'username' in request.data:
-            if User.objects.exclude(pk = user.id).filter(username=request.data['username']).exists():
-                return Response({"code": 400, "message": "用户名已存在"}, status=400)
-            user.username = request.data['username']
+                ext = request.FILES.get("avatar").name.split(".")[-1]
+                seafile_path = f"/ava/{user.id}_tmp_ava_upload.{ext}"
+                path = f"/ava/{user.id}_ava_upload.{ext}"
+                temp_filename = f'{user.id}_temp_ava_upload.{ext}'
+                final_filename = f'{user.id}_ava_upload.{ext}'
+                cache_key = f"{user.id}_tmp_ava_upload"
 
-            # 更新UserInfo扩展信息
-            user_info_fields = ['realName', 'desc', 'homePath', 'avatar','gender']
+                try:
+                    if not redis_conn.exists(cache_key):
+                        return Response({"code": 404, "message": "无待确认的头像"}, status=404)
+                    seafile_api.auth()
+
+                    repo = seafile_api.get_repo(repo_id)
+
+                    file_path = os.path.join("/ava",final_filename)
+
+                    temp_path = os.path.join("/ava", temp_filename)
+                    if final_filename in [x["name"] for x in repo.list_dir("/ava")]:
+                        repo.delete_file(path)
+                    repo.rename_file(seafile_path,final_filename)
+                    seafile_file_uploaded = True
+                    user_info = UserInfo.objects.get(userId=user.id)
+                    user_info.avatar = f'{server_url}/files/{repo_id}{final_filename}'
+                    user_info.save()
+
+                    return Response({
+                        "code": 200,
+                        "avayar_url":user_info.avatar,
+                        "message":"头像更新成功"
+                    })
+                except Exception as e:
+                    return Response({
+                        "code": 500,
+                        "error":f"上传失败:{str(e)}"
+                    },status=500)
+            user_info_fields = ['realName', 'desc', 'homePath', 'avatar', 'gender']
             for field in user_info_fields:
                 if field in request.data:
                     setattr(user_info, field, request.data[field])
@@ -258,68 +307,75 @@ class UserModificationView(APIView):
             user_info.save()
 
             return Response({
+                "username": user.username,
+                "realName": user_info.realName,
                 "code": 200,
-                "data": {
-                    "username": user.username,
-                    "realName": user_info.realName,
-                    "avatar": user_info.avatar,
-                    "gender": user_info.gender
-                },
+                "data": {"avatar": str(user_info.avatar),
+                         "gender": user_info.gender
+                         },
                 "message": "信息更新成功"
             })
-
-class AvatarChangeView(APIView):
-    permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]  # 允许文件上传[8](@ref)
-
-    def post(self, request):
-        user = request.user
-        user_info = UserInfo.objects.get(userId=user.id)
-        redis_conn = get_redis_connection("default")
-        temp_path = None
-        response_data = {"code": 200, "message": "信息更新成功"}
-        try:
-            if 'avatar' in request.FILES:
-                uploaded_file = request.FILES['avatar']
-
-                try:
-                    validate_image_content(uploaded_file)  # 调用自定义验证
-                except ValidationError as e:
-                    return Response({
-                        "code": 415,
-                        "error": f"文件验证失败: {e.detail[0]}"
-                    }, status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
-                # 生成唯一临时路径（示例：tmp/avatars/temp_89ab3c_123.jpg）
-                ext = uploaded_file.name.split('.')[-1]
-                temp_filename = f"temp_{uuid.uuid4().hex[:6]}_{user.id}.{ext}"
-                temp_path = default_storage.save(
-                    os.path.join(settings.TEMP_AVATAR_DIR, temp_filename),
-                    uploaded_file
-                )
-
-                # 缓存临时文件信息（有效期1小时）
-                redis_conn.hmset(
-                    f"avatar_temp_{user.id}",
-                    {
-                        'temp_path': temp_path,
-                        'final_path': f"{settings.FINAL_AVATAR_DIR}/{user.id}_{int(time.time())}.{ext}",
-                        'expire': str(int(time.time()) + 3600)
-                    }
-                )
-                response_data["preview_url"] = f"/media/{temp_path}"  # 关键点3：动态添加字段
-                response_data["message"] = "基本信息已更新，头像修改待确认"
-
-                user.save()
-                user_info.save()
-
-                return Response(response_data)
-
         except Exception as e:
-            if temp_path and default_storage.exists(temp_path):
-                default_storage.delete(temp_path)
+            return Response(user_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # TODO: email 检测重复, 检测修改后的内容是否符合规范,完成后取消下方注释,头像修改逻辑,完成后,直接拿到地址,赋给下方avatar
+
+class TempAvatarUploadView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self,request):
+        user = request.user
+        avatar_file = request.FILES.get('avatar')
+        ext = request.FILES.get('avatar').name.split('.')[-1]
+        filename = f"{user.id}_tmp_ava_upload.{ext}"
+        seafile_path = f"/ava/{user.id}_tmp_ava_upload.{ext}"  # Seafile中的存储路径
+        try:
+            seafile_api = SeafileAPI(login_name, pwd, server_url)
+            seafile_api.auth()  # 认证
+
+            # 获取仓库对象
+            repo = seafile_api.get_repo(repo_id)
+
+            # 创建临时目录保存文件（确保文件名正确）
+            temp_dir = tempfile.mkdtemp()
+            temp_file_path = os.path.join(temp_dir, filename)
+
+            with open(temp_file_path, 'wb') as temp_file:
+                for chunk in avatar_file.chunks():
+                    temp_file.write(chunk)
+
+            # 上传到Seafile
+            if filename in [x["name"] for x in repo.list_dir("/ava")]:
+                repo.delete_file(seafile_path)
+            repo.upload_file("/ava", temp_file_path)
+            seafile_file_uploaded = True
+
+        # 构造文件访问URL
+            avatar_url = f"{server_url.rstrip('/')}/avatar/{repo_id}{seafile_path}"
+
+            # 用户头像信息
+            user_info = UserInfo.objects.get(userId=user.id)
+            old_avatar = user_info.avatar
+            user_info.avatar = avatar_url
+            user_info.save()
+
+        # 缓存头像路径
+            redis_conn = get_redis_connection("default")
+            redis_conn.setex(
+                name=f"{user.id}_tmp_ava_upload",
+                time=3600,  # 1小时回滚有效期
+                value=json.dumps(avatar_url)
+            )
+
+            return Response({
+                "code": 200,
+                "message": "头像上传成功"
+            })
+        except Exception as e:
             return Response({
                 "code": 500,
-                "error": f"服务器错误: {str(e)}"
+                "error": f"上传失败：{str(e)}"
             }, status=500)
 
 class PasswordChangeView(APIView):
@@ -406,267 +462,6 @@ class AdminRoleModificationView(APIView):
                 "message": "角色不存在"
             }, status=404)
 
-
 class FileUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
-
-    def post(self, request):
-        """分阶段上传文件到临时目录"""
-        try:
-            uploaded_file = request.FILES['file']
-
-            # 文件验证
-            if uploaded_file.size > settings.MAX_FILE_SIZE:
-                return Response({"error": "文件大小超过100MB限制"}, status=413)
-
-            ext = uploaded_file.name.split('.')[-1].lower()
-            if ext not in settings.ALLOWED_FILE_TYPES:
-                return Response({"error": "不支持的文件类型"}, status=415)
-
-            # 生成临时存储路径
-            temp_filename = f"temp_{uuid.uuid4().hex[:8]}_{request.user.id}.{ext}"
-            temp_path = default_storage.save(
-                os.path.join(settings.TEMP_FILE_DIR, temp_filename),
-                uploaded_file
-            )
-
-            # Redis缓存文件信息
-            redis_conn = get_redis_connection("default")
-            redis_key = f"file_temp_{request.user.id}"
-            redis_conn.hmset(redis_key, {
-                'temp_path': temp_path,
-                'original_name': uploaded_file.name,
-                'expire': str(int(time.time()) + 3600)  # 1小时有效期
-            })
-
-            return Response({
-                "code": 200,
-                "preview_url": f"/media/{temp_path}",
-                "message": "文件已暂存，请确认提交"
-            })
-
-        except KeyError:
-            return Response({"error": "未接收到文件"}, status=400)
-
-class FileConfirmView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        """将临时文件转为正式存储"""
-        temp_path=None
-        user = request.user
-        redis_conn = get_redis_connection("default")
-        cache_key = f"file_temp_{user.id}"
-
-        if not redis_conn.exists(cache_key):
-            return Response({"code": 404, "message": "无待确认的文件"}, status=404)
-
-        cache_data = redis_conn.hgetall(cache_key)
-        try:
-            temp_path = cache_data[b'temp_path'].decode()
-            original_name = cache_data[b'original_name'].decode()
-
-            # 创建正式存储路径（网页1）
-            final_filename = f"{uuid.uuid4().hex[:8]}_{original_name}"
-            final_path = os.path.join(settings.FINAL_FILE_DIR, final_filename)
-
-            # 移动文件（网页4）
-            with default_storage.open(temp_path) as src_file:
-                saved_path = default_storage.save(final_path, src_file)
-
-            # 创建数据库记录
-            UserFile.objects.create(
-                user=user,
-                file=saved_path,
-                is_temporary=False,
-                original_name=original_name
-            )
-
-            # 清理缓存和临时文件
-            redis_conn.delete(cache_key)
-            default_storage.delete(temp_path)
-
-            return Response({
-                "code": 200,
-                "file_url": f"/media/{saved_path}",
-                "message": "文件已正式保存"
-            })
-
-        except Exception as e:
-            if temp_path and default_storage.exists(temp_path):
-                default_storage.delete(temp_path)
-            return Response({
-                "code": 500,
-                "error": f"文件确认失败：{str(e)}"
-            }, status=500)
-
-    def put(self, request):
-        url = 'http://192.168.101.69/v1/chat-messages'
-        api_key = 'app-uMcRADhYaBLnJCbByBIsjG8r'
-
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json'
-        }
-        data = {
-            "inputs": {},
-            "query": "你好",  # 用户输入内容
-            "response_mode": "streaming",  # 流式响应模式
-            "user": "user-123",  # 用户唯一标识
-            "conversation_id": ""  # 会话ID（支持连续对话）
-        }
-
-        response = requests.post(url, headers=headers, json=data)
-        if response.status_code == 200:
-            try:
-                print("响应内容:", response.json().get('answer'))
-            except requests.exceptions.JSONDecodeError:
-                print("响应非JSON格式:", response.text)
-                return Response({
-                    "code": 200,
-                    "response": response.text,
-                })
-        else:
-            print(f"请求失败[状态码{response.status_code}]:", response.text)
-            return Response(
-                f"请求失败[状态码{response.status_code}]:",
-                            )
-
-    def get(self, request):
-        url = 'http://192.168.101.69/v1/chat-messages'
-        api_key = 'app-uMcRADhYaBLnJCbByBIsjG8r'
-
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json'
-        }
-        data = {
-            "inputs": {},
-            "query": "你好",  # 用户输入内容
-            "response_mode": "streaming",  # 流式响应模式
-            "user": "user-123",  # 用户唯一标识
-            "conversation_id": ""  # 会话ID（支持连续对话）
-        }
-
-        response = requests.post(url, headers=headers, json=data)
-        if response.status_code == 200:
-            try:
-                print("响应内容:", response.json().get('answer'))
-            except requests.exceptions.JSONDecodeError:
-                print("响应非JSON格式:", response.text)
-                return Response({
-                    "code": 200,
-                    "response": response.text,
-                })
-        else:
-            print(f"请求失败[状态码{response.status_code}]:", response.text)
-            return Response(
-                f"请求失败[状态码{response.status_code}]:",
-            )
-class AvatarUploadView(APIView):
-    permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
-
-    def post(self,request):
-        serializer = AvatarUploadSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=400)
-        user = request.user
-        ext = request.FILES.get('avatar').name.split('.')[-1]
-        filename = f"{uuid.uuid4().hex[:8]}_{user.id}.{ext}"
-        upload_path = f"tmp/avatars/{filename}"
-        try:
-            print( request.FILES['avatar'])
-            default_storage.save(upload_path, request.FILES['avatar'])
-
-            user_info = UserInfo.objects.get(userId=user.id)
-            old_avatar = user_info.avatar
-            user_info.avatar = upload_path
-            user_info.save()
-
-            # 缓存旧头像路径（用于回滚）
-            redis_conn = get_redis_connection("default")
-            redis_conn.setex(
-                name=f"avatar_rollback_{user.id}",
-                time=3600,  # 1小时回滚有效期
-                value=old_avatar.encode('utf-8')
-            )
-
-            return Response({
-                "code": 200,
-                "data": {"avatar_url": f"/media/{upload_path}"},
-                "message": "头像上传成功"
-            })
-        except Exception as e:
-            return Response({
-                "code": 500,
-                "error": f"上传失败：{str(e)}"
-            }, status=500)
-
-
-class AvatarConfirmView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        user = request.user
-        redis_conn = get_redis_connection("default")
-        cache_key = f"avatar_temp_{user.id}"
-
-        # 验证缓存有效性
-        if not redis_conn.exists(cache_key):
-            return Response({"code": 404, "message": "无待确认的头像"}, status=404)
-
-        cache_data = redis_conn.hgetall(cache_key)
-        temp_path = cache_data[b'temp_path'].decode()
-        final_path = cache_data[b'final_path'].decode()
-
-        try:
-            # 移动文件到正式目录
-            with default_storage.open(temp_path) as src_file:
-                default_storage.save(final_path, src_file)
-
-            # 更新数据库记录
-            user_info = UserInfo.objects.get(userId=user.id)
-            old_avatar = user_info.avatar
-            user_info.avatar = final_path
-            user_info.save()
-
-            # 清理缓存和临时文件
-            redis_conn.delete(cache_key)
-            default_storage.delete(temp_path)
-
-            # 保存旧头像回滚点（参考网页6缓存策略）
-            if old_avatar.startswith(settings.FINAL_AVATAR_DIR):
-                redis_conn.setex(
-                    f"avatar_rollback_{user.id}",
-                    settings.AVATAR_ROLLBACK_TTL,
-                    old_avatar
-                )
-
-            return Response({
-                "code": 200,
-                "avatar_url": f"/media/{final_path}",
-                "message": "头像更新成功"
-            })
-
-        except Exception as e:
-            # 事务回滚（参考网页5错误处理）
-            default_storage.delete(final_path)
-            return Response({
-                "code": 500,
-                "error": f"确认失败：{str(e)}"
-            }, status=500)
-
-class AvatarRollbackView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        user = request.user
-        redis_conn = get_redis_connection("default")
-
-        if old_avatar := redis_conn.get(f"avatar_rollback_{user.id}"):
-            # 执行数据库回滚
-            UserInfo.objects.filter(userId=user.id).update(avatar=old_avatar.decode())
-            return Response({"code": 200, "message": "头像回滚成功"})
-        return Response({"code": 404, "message": "无可用回滚版本"}, status=404)

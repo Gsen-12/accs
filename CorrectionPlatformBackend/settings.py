@@ -12,6 +12,9 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from seafileapi import SeafileAPI
+
 # import sys
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -246,8 +249,6 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-MEDIA_URL = '/media/'
 
 TEMP_AVATAR_DIR = 'tmp/avatars'
 FINAL_AVATAR_DIR = 'avatars'
@@ -262,17 +263,23 @@ DIFY_API_KEY = os.getenv('app-uMcRADhYaBLnJCbByBIsjG8r')
 
 DIFY_UPLOAD_URL = "https://192.168.101.69/v1/chat-messages"
 
+# SEAFILE_CONFIG = {
+#     'API_BASE': 'https://seafile.accs.rabbitmind.net',  # Seafile服务地址
+#     'API_TOKEN': 'b9493568a48c5d8c6bcf3fe83d89eefd9177d257',         # 管理员API令牌
+#     'AVATAR_REPO_ID': 'ad457d57-2577-4686-89b7-4f69c8a5195c',       # 专门存储头像的文件库ID
+#     'UPLOAD_URL': '/api2/repos/{repo_id}/upload-link/',
+#     'FILE_URL_TEMPLATE': '{repo_id}/files?p=/{file_path}',  # 需在代码中传入实际 repo_id
+#     # 'AVATAR_DIR' : '/ava'  # 存储目录
+# }
+
 SEAFILE_CONFIG = {
-    'API_BASE': 'https://seafile.accs.rabbitmind.net',  # Seafile服务地址
-    'API_TOKEN': 'b9493568a48c5d8c6bcf3fe83d89eefd9177d257',         # 管理员API令牌
-    'AVATAR_REPO_ID': 'ad457d57-2577-4686-89b7-4f69c8a5195c',       # 专门存储头像的文件库ID
-    'UPLOAD_URL': '/api2/repos/{repo_id}/upload-link/',
-    'FILE_URL_TEMPLATE': '{repo_id}/files?p=/{file_path}',  # 需在代码中传入实际 repo_id
-    # 'AVATAR_DIR' : '/ava'  # 存储目录
+    'API_BASE': 'https://seafile.accs.rabbitmind.net',
+    'AVATAR_REPO_ID': 'ad406967-dd0d-4d5c-949c-cdd62d21b9fe',
+    'UPLOAD_DIR': '/用户头像'  # 新增标准化存储目录
 }
 
 # 新增Seafile配置
-# SEAFILE_API_URL = '/api2/repos/{ad457d57-2577-4686-89b7-4f69c8a5195c}/upload-link/'
-# SEAFILE_API_TOKEN = 'b9493568a48c5d8c6bcf3fe83d89eefd9177d257'  # 从Seafile后台获取
-# SEAFILE_REPO_ID = 'ad457d57-2577-4686-89b7-4f69c8a5195c'  # 头像存储的仓库ID
-# SEAFILE_AVATAR_DIR = '/avatars'  # 存储目录
+server_url = "https://seafile.accs.rabbitmind.net/"
+login_name = "accs@admin.com"
+pwd = "accs@Aa"
+repo_id = "ad406967-dd0d-4d5c-949c-cdd62d21b9fe"

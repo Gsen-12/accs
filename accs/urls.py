@@ -4,8 +4,8 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg import openapi
 # from drf_yasg.views import get_schema_view
 from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
-    UserModificationView, PasswordChangeView, AvatarUploadView, AvatarRollbackView, AvatarChangeView, AvatarConfirmView, \
-    FileConfirmView, ClassAssignmentView, ClassViewSet
+    UserModificationView, PasswordChangeView,\
+    FileConfirmView, ClassAssignmentView, ClassViewSet, TempAvatarUploadView
 from django.conf import settings
 from django.conf.urls.static import static
 from accs.views import FileUploadView
@@ -38,10 +38,7 @@ urlpatterns = [
     # path('users/', AdminUserListView.as_view(), name='admin-users'),
     # path('swagger/', schema_view.with_ui('swagger', cache_timeout=0)),
     path('captcha/', include('captcha.urls')),
-    path('avatar/upload/', AvatarUploadView.as_view(), name='avatar-upload'),
-    path('avatar/change/', AvatarChangeView.as_view(), name='avatar-upload'),
-    path('avatar/confirm/', AvatarConfirmView.as_view(), name='avatar-upload'),
-    path('avatar/rollback/', AvatarRollbackView.as_view(), name='avatar-rollback'),
+    path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
     path('file/upload/', FileUploadView.as_view(), name='file-upload'),
     path('file/confirm/', FileConfirmView.as_view(), name='file-confirm'),
     # path('call/dify/',DifyView.as_view(),name='call-dify'),

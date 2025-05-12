@@ -55,7 +55,7 @@ class UserInfoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UserInfo
-        fields = ['userId', 'desc','homePath','avatar', 'realName', 'role_id','gender']
+        fields = ['userId', 'desc','homePath','avatar', 'realName', 'role_id','gender', 'repo_id']
 
     def create(self, validated_data):
         userinfo = UserInfo.objects.create(**validated_data, userId=self.context.get("userId"))
@@ -64,30 +64,21 @@ class UserInfoSerializer(serializers.ModelSerializer):
     def get(self):
         return self.data.items()
 
-    def validate_image_content(value):
-        # 验证实际文件内容（防止伪扩展名攻击）
-        from PIL import Image
-        try:
-            img = Image.open(value)
-            img.verify()
-        except Exception as e:
-            raise serializers.ValidationError("非法的图像文件内容")
-        return value
-
 class UserSerializer(serializers.ModelSerializer):
     userId = serializers.IntegerField(read_only=True)
     desc = serializers.CharField(read_only=True)
     homePath = serializers.CharField(read_only=True)
-    avatar = serializers.CharField(read_only=True)
+    avatar = serializers.CharField(required=False)
     realName = serializers.CharField(read_only=True)
     role_id = serializers.IntegerField(read_only=True)
     token = serializers.CharField(read_only=True)
     gender = serializers.IntegerField(read_only=True)
     email = serializers.EmailField(required=True)
+    repo_id = serializers.CharField(required=True)
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'password', 'email', 'userId','desc','homePath','avatar','realName','role_id', 'token','gender'
+            'id', 'username', 'password', 'email', 'userId','desc','homePath','avatar','realName','role_id', 'token','gender', 'repo_id'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -110,10 +101,14 @@ class UserSerializer(serializers.ModelSerializer):
         return user
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
+        if User.objects.exclude(pk=self.instance.pk).filter(email=value).exists():
             raise serializers.ValidationError("该邮箱已被注册")
         return value
 
+    def validate_real_name(self, value):
+        if User.objects.exclude(pk=self.instance.pk).filter(real_name=value).exists():
+            raise serializers.ValidationError("该真实姓名已被使用")
+        return value
 
 class RolesSerializer(serializers.ModelSerializer):
     permissions = serializers.SlugRelatedField(
@@ -163,7 +158,7 @@ class AvatarUploadSerializer(serializers.Serializer):
         help_text="支持格式：JPEG/PNG，最大5MB",
         validators=[
             FileExtensionValidator(allowed_extensions=["jpg", "jpeg", "png"]),
-            # 新增内容类型验证（网页5）
+            # 新增内容类型验证
             lambda value: ValidationError("仅支持JPEG/PNG")
                         if value.content_type not in ["image/jpeg", "image/png"]
             else None

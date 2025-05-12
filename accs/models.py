@@ -99,6 +99,7 @@ class UserInfo(models.Model):
         through_fields=('user_info', 'classroom'),  # 关键点2：声明关联字段
         related_name='members'
     )
+    repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
 class ClassMembership(models.Model):
     # 关键点3：正确的外键命名和关联
     user_info = models.ForeignKey(
