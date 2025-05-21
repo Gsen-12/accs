@@ -2,13 +2,12 @@ import datetime
 import json
 import os
 import tempfile
-
+import uuid
 from django.contrib.auth import authenticate, get_user_model
 from django.db.models import Q
 from django.http import JsonResponse
 from django_redis import get_redis_connection
-from rest_framework import status, viewsets
-from rest_framework.decorators import action
+from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -19,14 +18,12 @@ from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 from seafileapi import SeafileAPI
 
-from CorrectionPlatformBackend import settings
 from CorrectionPlatformBackend.settings import repo_id, login_name, server_url, pwd
-from accs.models import Roles, UserInfo, UserFile, Class
-from accs.permissions import IsSuperAdmin
+from accs.models import Roles, UserInfo, Group, GroupAssignment
+from accs.permissions import IsSuperAdmin, IsTeacher
 from accs.serializers import UserSerializer, UserInfoSerializer, RolesSerializer, \
-     validate_image_content, ClassCreateSerializer, AssignStudentSerializer, ClassSerializer
+    validate_image_content, GroupSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
-import requests
 from accs.utils.middleware import UUIDTools
 
 User = get_user_model()
@@ -36,13 +33,12 @@ def csrf_failure(request, reason=""):
     return JsonResponse({"error": "CSRF验证失败"}, status=403)
 
 
-
 class RegisterView(APIView):
     permission_classes = [AllowAny]
 
     @staticmethod
     def post(request):
-        if not {'username', 'password', 'role_id','gender'}.issubset(request.data):
+        if not {'username', 'password', 'role_id', 'gender'}.issubset(request.data):
             return Response({"message": "缺少必填字段"}, status=400)
         if len(request.data['password']) < 8:
             return Response({"password": "密码长度需至少8位"}, status=400)
@@ -162,54 +158,174 @@ class MyCustomBackend(TokenObtainPairView):
             return None
 
 
-class ClassViewSet(viewsets.ModelViewSet):
-    queryset = Class.objects.all()
-    permission_classes = [IsAuthenticated]
+class CreateGroupView(APIView):
+    permission_classes = [IsSuperAdmin]
 
-    def get_serializer_class(self):
-        if self.action == 'create':
-            return ClassCreateSerializer
-        return ClassSerializer
-
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
-
-    @action(detail=False, methods=['get'])
-    def my_classes(self, request):
-        """获取当前教师创建的班级"""
-        classes = Class.objects.filter(created_by=request.user)
-        serializer = self.get_serializer(classes, many=True)
-        return Response(serializer.data)
-
-
-class ClassAssignmentView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        serializer = AssignStudentSerializer(
+    @staticmethod
+    def post(request):
+        if not {'study_groups'}.issubset(request.data):
+            return Response({"message": "缺少必填字段"}, status=400)
+        uuid = UUIDTools().uuid4_hex()
+        group_serializer = GroupSerializer(
             data=request.data,
-            context={'request': request}
+            context={'request': request, 'GroupId': uuid}
         )
-        serializer.is_valid(raise_exception=True)
+        if group_serializer.is_valid():
+            group_serializer.save()
+            return Response({
+                "code": 201,
+                "data": {
+                    "GroupId": group_serializer.get_id(),
+                    "study_groups": request.data['study_groups']
+                },
+                "message": "班级创建成功"
+            }, status=status.HTTP_201_CREATED)
+        return Response(group_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        classroom = serializer.validated_data['class_id']
-        student_ids = serializer.validated_data['student_ids']
+class AssignGroupView(APIView):
+    permission_classes = [IsTeacher]
 
-        # 验证教师权限
-        if classroom.created_by != request.user:
+    @staticmethod
+    def post(request):
+        if not {'user_id','group_id'}.issubset(request.data):
+            return Response({"message": "缺少必填字段"}, status=400)
+        user_id = request.data.get('user_id')
+        group_id = request.data.get('group_id')
+        # if request.user.userinfo.role_id == 2:
+        #     return Response({"code": 404, "message": "用户为老师"}, status=404)
+        # if request.user.userinfo.role_id == 3:
+
+        try:
+            user = User.objects.get(id=user_id)
+
+            group = Group.objects.get(GroupId=group_id)
+        except User.DoesNotExist:
+            return Response({"code": 404, "message": "用户不存在"}, status=404)
+        except Group.DoesNotExist:
+            return Response({"code": 404, "message": "班级不存在"}, status=404)
+        try:
+            assignment, created = GroupAssignment.objects.get_or_create(
+                userId=user_id,
+                groupId=group_id,
+                defaults={'userId': user_id, 'groupId': group_id}
+            )
+            if not created:
+                return Response({"code": 409, "message": "用户已在该班级中"}, status=409)
+
+            return Response({
+                "code": 200,
+                "data": {
+                    "user_id": user_id,
+                    "group_id": group_id
+                },
+                "message": "加入班级成功"
+            }, status=200)
+        except Exception as e:
+            return Response({"code": 500, "error": str(e)}, status=500)
+
+class InvitationCodeview(APIView):
+    permission_classes = [IsTeacher]
+
+    @staticmethod
+    def post(request):
+        group_id = request.data.get('group_id')
+        group = Group.objects.get(GroupId=group_id)
+        try:
+            invitation_code = uuid.uuid4().hex[:8]
+            redis_conn = get_redis_connection("invitation")
+            redis_conn.setex(
+                name= group_id,
+                time= 3600,  # 1小时回滚有效期
+                value=json.dumps(invitation_code)
+            )
+            return Response({
+                "code": 200,
+                "error": f"获取邀请码成功",
+                'data':{invitation_code}
+            }, status=200)
+        except Exception as e:
+            return Response({
+                "code": 500,
+                "error": f"获取邀请码失败：{str(e)}"
+            }, status=500)
+
+class JoinGroupView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @staticmethod
+    def post(request):
+        if not {'group_id','invitation_code'}.issubset(request.data):
+            return Response({"message": "缺少必填字段"}, status=400)
+        redis_conn = get_redis_connection('invitation')
+        stored_code = redis_conn.get(request.data['group_id'])
+
+        if not stored_code:
+            return Response({
+                'code':404,
+                'message':'邀请码已过期'
+            },status=404)
+        if request.data['invitation_code'] != json.loads(stored_code):
             return Response({
                 "code": 403,
-                "message": "无权操作其他教师的班级"
+                "message": "邀请码无效"
             }, status=403)
 
-        # 批量关联学生
-        students = User.objects.filter(id__in=student_ids)
-        classroom.students.add(*students)
+        try:
+            # 检查当前用户是否已有班级关联记录
+            # 使用当前登录用户的ID过滤GroupAssignment表记录
+            existing_assignments = GroupAssignment.objects.filter(userId=request.user.id)
 
-        return Response({
-            "code": 200,
-            "message": f"成功添加{len(students)}名学生"
-        })
+            if existing_assignments.exists():
+                return Response({
+                    'code': 409,
+                    'message': '您已加入其他班级，确认要覆盖吗？',
+                    'existing_groups': [
+                        str(ass.groupId) for ass in existing_assignments# 遍历查询集提取班级ID
+                    ]
+                }, status=409)
+            assignment, created = GroupAssignment.objects.get_or_create(
+                userId=request.user.id,
+                groupId=request.data['group_id'],
+                defaults={
+                    'userId': request.user.id,
+                    'groupId':request.data['group_id'],
+                }
+            )
+            if not created:
+                return Response({
+                    'code': 406,
+                    'message':'已在本班级中'
+                },status=406)
+            return Response({
+                'code':200,
+                'data':{
+                    'group_id':request.data['group_id'],
+                }
+            },status=200)
+        except Exception as e:
+            return Response({"code": 500, "error": str(e)}, status=500)
+
+
+class JoinConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # 需要接收确认参数和班级ID
+        if not {'group_id', 'confirm'}.issubset(request.data):
+            return Response({"code": 400, "message": "缺少必要参数"}, status=400)
+
+        if request.data['confirm'] == 'true':
+            # 删除原有班级关联
+            GroupAssignment.objects.filter(userId=request.user.id).delete()
+
+            # 创建新关联
+            GroupAssignment.objects.create(
+                userId=request.user.id,
+                groupId=request.data['group_id']
+            )
+            return Response({'code': 200, 'message': '班级覆盖成功'})
+
+        return Response({'code': 406, 'message': '取消覆盖操作'}, status=406)
 
 class CurrentUserView(RetrieveAPIView):
     serializer_class = UserSerializer
@@ -229,12 +345,14 @@ class CurrentUserView(RetrieveAPIView):
         user.token = self.request.headers.get('authorization').replace("Bearer ", "")
         return user  # 通过JWT自动解析用户身份
 
+
 class UserModificationView(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = UserSerializer
+
     def post(self, request):
         user = request.user
-        user_info = UserInfo.objects.get(userId = user.id)
+        user_info = UserInfo.objects.get(userId=user.id)
         redis_conn = get_redis_connection("default")
         user_serializer = UserSerializer
         seafile_file_uploaded = False
@@ -243,18 +361,18 @@ class UserModificationView(APIView):
             if user_info.avatar == request.data['avatar'] \
                     and user_info.realName == request.data['realName'] \
                     and user_info.gender == request.data['gender']:
-                    return Response({
-                        "code": 406,
-                        "data": {
-                            "username": user.username,
-                            "realName": user_info.realName,
-                            "avatar": user_info.avatar,
-                            "gender": user_info.gender
-                        },
-                        "message": "没有任何修改请检查!"
-                    })
+                return Response({
+                    "code": 406,
+                    "data": {
+                        "username": user.username,
+                        "realName": user_info.realName,
+                        "avatar": user_info.avatar,
+                        "gender": user_info.gender
+                    },
+                    "message": "没有任何修改请检查!"
+                })
             if 'avatar' in request.FILES:
-                seafile_api = SeafileAPI(login_name,pwd,server_url)
+                seafile_api = SeafileAPI(login_name, pwd, server_url)
                 avatar_file = request.FILES['avatar']
                 try:
                     validate_image_content(avatar_file)  # 自定义验证函数
@@ -278,12 +396,12 @@ class UserModificationView(APIView):
 
                     repo = seafile_api.get_repo(repo_id)
 
-                    file_path = os.path.join("/ava",final_filename)
+                    file_path = os.path.join("/ava", final_filename)
 
                     temp_path = os.path.join("/ava", temp_filename)
                     if final_filename in [x["name"] for x in repo.list_dir("/ava")]:
                         repo.delete_file(path)
-                    repo.rename_file(seafile_path,final_filename)
+                    repo.rename_file(seafile_path, final_filename)
                     seafile_file_uploaded = True
                     user_info = UserInfo.objects.get(userId=user.id)
                     user_info.avatar = f'{server_url}/files/{repo_id}{final_filename}'
@@ -291,14 +409,14 @@ class UserModificationView(APIView):
 
                     return Response({
                         "code": 200,
-                        "avayar_url":user_info.avatar,
-                        "message":"头像更新成功"
+                        "avayar_url": user_info.avatar,
+                        "message": "头像更新成功"
                     })
                 except Exception as e:
                     return Response({
                         "code": 500,
-                        "error":f"上传失败:{str(e)}"
-                    },status=500)
+                        "error": f"上传失败:{str(e)}"
+                    }, status=500)
             user_info_fields = ['realName', 'desc', 'homePath', 'avatar', 'gender']
             for field in user_info_fields:
                 if field in request.data:
@@ -320,11 +438,12 @@ class UserModificationView(APIView):
 
         # TODO: email 检测重复, 检测修改后的内容是否符合规范,完成后取消下方注释,头像修改逻辑,完成后,直接拿到地址,赋给下方avatar
 
+
 class TempAvatarUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
-    def post(self,request):
+    def post(self, request):
         user = request.user
         avatar_file = request.FILES.get('avatar')
         ext = request.FILES.get('avatar').name.split('.')[-1]
@@ -351,7 +470,7 @@ class TempAvatarUploadView(APIView):
             repo.upload_file("/ava", temp_file_path)
             seafile_file_uploaded = True
 
-        # 构造文件访问URL
+            # 构造文件访问URL
             avatar_url = f"{server_url.rstrip('/')}/avatar/{repo_id}{seafile_path}"
 
             # 用户头像信息
@@ -360,7 +479,7 @@ class TempAvatarUploadView(APIView):
             user_info.avatar = avatar_url
             user_info.save()
 
-        # 缓存头像路径
+            # 缓存头像路径
             redis_conn = get_redis_connection("default")
             redis_conn.setex(
                 name=f"{user.id}_tmp_ava_upload",
@@ -377,6 +496,7 @@ class TempAvatarUploadView(APIView):
                 "code": 500,
                 "error": f"上传失败：{str(e)}"
             }, status=500)
+
 
 class PasswordChangeView(APIView):
     permission_classes = [IsAuthenticated]
@@ -461,6 +581,7 @@ class AdminRoleModificationView(APIView):
                 "code": 404,
                 "message": "角色不存在"
             }, status=404)
+
 
 class FileUploadView(APIView):
     permission_classes = [IsAuthenticated]

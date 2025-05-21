@@ -177,6 +177,13 @@ CACHES = {
             "SOCKET_TIMEOUT": 5,
         },
         "KEY_PREFIX": "jwt_"
+    },
+    "invitation":{
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://@127.0.0.1:6379/3",
+        "OPTIONS": {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        }
     }
 }
 

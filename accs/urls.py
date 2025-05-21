@@ -4,15 +4,14 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg import openapi
 # from drf_yasg.views import get_schema_view
 from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
-    UserModificationView, PasswordChangeView,\
-    FileConfirmView, ClassAssignmentView, ClassViewSet, TempAvatarUploadView
+    UserModificationView, PasswordChangeView, TempAvatarUploadView, CreateGroupView, InvitationCodeview, \
+    AssignGroupView, JoinGroupView, JoinConfirmView
 from django.conf import settings
 from django.conf.urls.static import static
 from accs.views import FileUploadView
 # from accs.views import AdminUserListView
 
 router = DefaultRouter()
-router.register(r'classes', ClassViewSet, basename='class')
 # router.register(r'XXXX', XXXXX)
 # schema_view = get_schema_view(
 #     openapi.Info(
@@ -40,9 +39,11 @@ urlpatterns = [
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
     path('file/upload/', FileUploadView.as_view(), name='file-upload'),
-    path('file/confirm/', FileConfirmView.as_view(), name='file-confirm'),
     # path('call/dify/',DifyView.as_view(),name='call-dify'),
-    path('classes/my/', ClassViewSet.as_view({'get': 'my_classes'})),
-    path('assign/', ClassAssignmentView.as_view()),
+    path('group/create/', CreateGroupView.as_view(),name='create-group'),
+    path('group/invite_code/', InvitationCodeview.as_view(),name='invite-code'),
+    path('assign/', AssignGroupView.as_view(),name='assign-group'),
+    path('group/join/', JoinGroupView.as_view(),name='join-group'),
+    path('confirm/join/', JoinConfirmView.as_view(),name='confirm-join'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

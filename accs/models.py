@@ -8,6 +8,7 @@ from CorrectionPlatformBackend import settings
 # Create your models here.
 
 class Roles(models.Model):
+    ADMIN_ROLE_ID = 3
     role_id = models.AutoField(primary_key=True)  # 改为自增字段
     role_name = models.CharField(max_length=200, unique=True)
     permissions = models.ManyToManyField(
@@ -58,31 +59,22 @@ class UserFile(models.Model):
     def get_final_path(self):
         return f"{settings.FINAL_FILE_DIR}/{self.original_name}"
 
-class Class(models.Model):
-    class_id = models.AutoField(primary_key=True)
-    class_name = models.CharField(max_length=100, unique=True)
-    created_by = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='created_classes'
-    )
-    students = models.ManyToManyField(
-        User,
-        related_name='student_classes',
-        limit_choices_to={'userinfo__role_id': 1}  # 仅允许关联学生
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        verbose_name = "班级"
-        verbose_name_plural = "班级"
-        unique_together = ('class_name', 'created_by')  # 同教师下班级名不可重复
+class Group(models.Model):
+    GroupId = models.IntegerField(primary_key=True)
+    school = models.CharField(max_length=255,null=True)
+    college = models.CharField(max_length=255,null=True)
+    specialty = models.CharField(max_length=255,null=True)
+    study_groups = models.CharField(max_length=100, verbose_name="班级名称")
 
+class GroupAssignment(models.Model):
+    userId = models.CharField(max_length=255)
+    groupId = models.CharField(max_length=255)
 class UserInfo(models.Model):
     # userId = models.OneToOneField(
     #     User,
     #     on_delete=models.CASCADE,  # 必须设置级联删除
-    #     primary_key=True,
+    #     pspecialtyrimary_key=True,
     #     related_name='userinfo'
     # )
     userId = models.IntegerField(primary_key=True)
@@ -93,27 +85,6 @@ class UserInfo(models.Model):
     role_id = models.IntegerField(null=False)
     GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
     gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
-    classes = models.ManyToManyField(
-        Class,
-        through='ClassMembership',  # 关键点1：明确指定中间模型
-        through_fields=('user_info', 'classroom'),  # 关键点2：声明关联字段
-        related_name='members'
-    )
     repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
-class ClassMembership(models.Model):
-    # 关键点3：正确的外键命名和关联
-    user_info = models.ForeignKey(
-        UserInfo,
-        on_delete=models.CASCADE,
-        related_name='class_relations'  # 自定义反向关联名
-    )
-    classroom = models.ForeignKey(
-        Class,
-        on_delete=models.CASCADE,
-        related_name='student_relations'  # 自定义反向关联名
-    )
-    join_date = models.DateField(auto_now_add=True)
 
-    class Meta:
-        # 确保唯一性约束
-        unique_together = ('user_info', 'classroom')
+

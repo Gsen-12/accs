@@ -1,10 +1,14 @@
+import random
+import string
+
 from django.core.validators import FileExtensionValidator
 from django.contrib.auth.models import User, Permission
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from accs.models import Roles, UserFile, UserInfo, Class
+from accs.models import Roles, UserFile, UserInfo, Group, GroupAssignment
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from PIL import Image
+
 
 def validate_image_content(value):
     """
@@ -55,7 +59,7 @@ class UserInfoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UserInfo
-        fields = ['userId', 'desc','homePath','avatar', 'realName', 'role_id','gender', 'repo_id']
+        fields = ['userId', 'desc', 'homePath', 'avatar', 'realName', 'role_id', 'gender', 'repo_id']
 
     def create(self, validated_data):
         userinfo = UserInfo.objects.create(**validated_data, userId=self.context.get("userId"))
@@ -63,6 +67,7 @@ class UserInfoSerializer(serializers.ModelSerializer):
 
     def get(self):
         return self.data.items()
+
 
 class UserSerializer(serializers.ModelSerializer):
     userId = serializers.IntegerField(read_only=True)
@@ -74,16 +79,19 @@ class UserSerializer(serializers.ModelSerializer):
     token = serializers.CharField(read_only=True)
     gender = serializers.IntegerField(read_only=True)
     email = serializers.EmailField(required=True)
-    repo_id = serializers.CharField(required=True)
+    repo_id = serializers.CharField(required=False)
+
+
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'password', 'email', 'userId','desc','homePath','avatar','realName','role_id', 'token','gender', 'repo_id'
+            'id', 'username', 'password', 'email', 'userId', 'desc', 'homePath', 'avatar', 'realName', 'role_id',
+            'token', 'gender', 'repo_id'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
-            'id':{'required': False},
-            'role_id': {'required': False}
+            'id': {'required': False},
+            'role_id': {'required': False},
         }
 
     # def get_role_id(self, obj):
@@ -95,20 +103,21 @@ class UserSerializer(serializers.ModelSerializer):
     def get_id(self):
         return self.context.get("id")
 
-
     def create(self, validated_data):
         user = User.objects.create_user(**validated_data, id=self.context.get("id"))
         return user
 
+
     def validate_email(self, value):
-        if User.objects.exclude(pk=self.instance.pk).filter(email=value).exists():
+        if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("该邮箱已被注册")
         return value
 
     def validate_real_name(self, value):
-        if User.objects.exclude(pk=self.instance.pk).filter(real_name=value).exists():
+        if User.objects.filter(real_name=value).exists():
             raise serializers.ValidationError("该真实姓名已被使用")
         return value
+
 
 class RolesSerializer(serializers.ModelSerializer):
     permissions = serializers.SlugRelatedField(
@@ -151,6 +160,7 @@ class FileUploadSerializer(serializers.ModelSerializer):
             'file': {'write_only': True}
         }
 
+
 class AvatarUploadSerializer(serializers.Serializer):
     avatar = serializers.ImageField(
         allow_empty_file=False,
@@ -160,7 +170,7 @@ class AvatarUploadSerializer(serializers.Serializer):
             FileExtensionValidator(allowed_extensions=["jpg", "jpeg", "png"]),
             # 新增内容类型验证
             lambda value: ValidationError("仅支持JPEG/PNG")
-                        if value.content_type not in ["image/jpeg", "image/png"]
+            if value.content_type not in ["image/jpeg", "image/png"]
             else None
         ]
     )
@@ -173,49 +183,41 @@ class AvatarUploadSerializer(serializers.Serializer):
             raise ValidationError("仅支持JPEG/PNG格式")
         return value
 
-class ClassSerializer(serializers.ModelSerializer):
-    teacher_name = serializers.CharField(source='created_by.username', read_only=True)
-    student_count = serializers.IntegerField(source='students.count', read_only=True)
-
+class AssignGroupSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Class
-        fields = ['class_id', 'class_name', 'teacher_name', 'student_count', 'created_at']
+        model = GroupAssignment
+        fields = [
+            'userId',
+            'groupId',
+        ]
+
+class GroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Group
+        fields = [
+            'school',
+            'college',
+            'specialty',
+            'study_groups',
+        ]
         extra_kwargs = {
-            'created_by': {'write_only': True}
+            'GroupId' : {'required': False}
         }
 
+    def get_id(self):
+        return self.context.get("GroupId")
 
-class ClassCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Class
-        fields = ['class_name']
-
-    def validate_class_name(self, value):
-        user = self.context['request'].user
-        if Class.objects.filter(class_name=value, created_by=user).exists():
-            raise serializers.ValidationError("您已创建过同名班级")
-        return value
-
-
-class AssignStudentSerializer(serializers.Serializer):
-    student_ids = serializers.ListField(
-        child=serializers.IntegerField(),
-        min_length=1
-    )
-    class_id = serializers.IntegerField()
-
-    def validate_student_ids(self, value):
-        # 验证学生是否存在且角色正确
-        students = User.objects.filter(
-            id__in=[1,2],
-            userinfo__role_id=1
+    def create(self, validated_data):
+        group = Group.objects.create(
+            GroupId=self.context['GroupId'],
+            study_groups=validated_data['study_groups'],
         )
-        if len(students) != len(value):
-            raise serializers.ValidationError("包含无效学生ID")
+        return group
+
+    def validate_study_groups(self, value):
+        if Group.objects.filter(study_groups=value).exists():
+            raise serializers.ValidationError("该班级名称已存在")
         return value
 
-    def validate_class_id(self, value):
-        try:
-            return Class.objects.get(class_id=value)
-        except Class.DoesNotExist:
-            raise serializers.ValidationError("班级不存在")
+
+
