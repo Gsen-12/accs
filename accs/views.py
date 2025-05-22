@@ -183,7 +183,7 @@ class CreateGroupView(APIView):
         return Response(group_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class AssignGroupView(APIView):
-    permission_classes = [IsTeacher]
+    permissions_classes = [IsTeacher]
 
     @staticmethod
     def post(request):
@@ -191,13 +191,14 @@ class AssignGroupView(APIView):
             return Response({"message": "缺少必填字段"}, status=400)
         user_id = request.data.get('user_id')
         group_id = request.data.get('group_id')
-        # if request.user.userinfo.role_id == 2:
-        #     return Response({"code": 404, "message": "用户为老师"}, status=404)
+        if request.user.userinfo.role_id == 2:
+            return Response({"code": 404, "message": "用户为老师"}, status=404)
         # if request.user.userinfo.role_id == 3:
 
         try:
             user = User.objects.get(id=user_id)
-
+            if request.user.userinfo.role_id == 2:
+                return Response({"code": 404, "message": "用户为老师"}, status=404)
             group = Group.objects.get(GroupId=group_id)
         except User.DoesNotExist:
             return Response({"code": 404, "message": "用户不存在"}, status=404)
@@ -224,7 +225,7 @@ class AssignGroupView(APIView):
             return Response({"code": 500, "error": str(e)}, status=500)
 
 class InvitationCodeview(APIView):
-    permission_classes = [IsTeacher]
+    permissions_classes = [IsTeacher]
 
     @staticmethod
     def post(request):
@@ -250,7 +251,7 @@ class InvitationCodeview(APIView):
             }, status=500)
 
 class JoinGroupView(APIView):
-    permission_classes = [IsAuthenticated]
+    permissions_classes = [IsAuthenticated]
 
     @staticmethod
     def post(request):
@@ -468,7 +469,7 @@ class TempAvatarUploadView(APIView):
             if filename in [x["name"] for x in repo.list_dir("/ava")]:
                 repo.delete_file(seafile_path)
             repo.upload_file("/ava", temp_file_path)
-            seafile_file_uploaded = True
+
 
             # 构造文件访问URL
             avatar_url = f"{server_url.rstrip('/')}/avatar/{repo_id}{seafile_path}"
@@ -586,3 +587,49 @@ class AdminRoleModificationView(APIView):
 class FileUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+    def post(self, request):
+        user = request.user
+        user_file = request.FILES.get('file')
+        ext = request.FILES.get('file').name.split('.')[-1]
+        filename = f"{user.id}_file_upload.{ext}"
+        seafile_path = f"/file/{user.id}_file_upload.{ext}"  # Seafile中的存储路径
+        try:
+            seafile_api = SeafileAPI(login_name, pwd, server_url)
+            seafile_api.auth()  # 认证
+
+            # 获取仓库对象
+            repo = seafile_api.get_repo(repo_id)
+
+            # 创建临时目录保存文件（确保文件名正确）
+            dir = tempfile.mkdtemp()
+            file_path = os.path.join(dir, filename)
+
+            with open(file_path, 'wb') as temp_file:
+                for chunk in user_file.chunks():
+                    temp_file.write(chunk)
+
+            # 上传到Seafile
+            if filename in [x["name"] for x in repo.list_dir("/file")]:
+                repo.delete_file(seafile_path)
+            repo.upload_file("/file", file_path)
+
+            # 构造文件访问URL
+            file_url = f"{server_url.rstrip('/')}/file/{repo_id}{seafile_path}"
+
+            redis_conn = get_redis_connection("file")
+            redis_conn.setex(
+                name=f"{user.id}_file_upload",
+                time=360000,
+                value=json.dumps(file_url)
+            )
+
+            return Response({
+                "code": 200,
+                "message": "文件上传成功"
+            })
+        except Exception as e:
+            return Response({
+                "code": 500,
+                "error": f"上传失败：{str(e)}"
+            }, status=500)
+
