@@ -1,7 +1,6 @@
 from django.contrib.auth.models import AbstractUser, User
 from django.db import models
 from rest_framework_simplejwt.tokens import RefreshToken
-
 from CorrectionPlatformBackend import settings
 
 
@@ -30,6 +29,7 @@ class Roles(models.Model):
     class Meta:
         verbose_name = "角色"
         verbose_name_plural = "角色"
+
 
 class BlacklistedToken(models.Model):
     token = models.CharField(max_length=255, unique=True)
@@ -62,14 +62,17 @@ class UserFile(models.Model):
 
 class Group(models.Model):
     GroupId = models.IntegerField(primary_key=True)
-    school = models.CharField(max_length=255,null=True)
-    college = models.CharField(max_length=255,null=True)
-    specialty = models.CharField(max_length=255,null=True)
+    school = models.CharField(max_length=255, null=True)
+    college = models.CharField(max_length=255, null=True)
+    specialty = models.CharField(max_length=255, null=True)
     study_groups = models.CharField(max_length=100, verbose_name="班级名称")
+
 
 class GroupAssignment(models.Model):
     userId = models.CharField(max_length=255)
     groupId = models.CharField(max_length=255)
+
+
 class UserInfo(models.Model):
     # userId = models.OneToOneField(
     #     User,
@@ -88,3 +91,30 @@ class UserInfo(models.Model):
     repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
 
 
+class AnalysisResult(models.Model):
+    vulnerabilities = models.IntegerField()  # IntegerField：精确数字
+    errors = models.IntegerField()
+    code_smells = models.IntegerField()
+    accepted_issues = models.IntegerField()
+    duplicates = models.IntegerField()
+    timestamp = models.DateTimeField(auto_now_add=True)  # DateTimeField：时间，扫描时auto_now_add=True自动添加时间
+    type = models.JSONField(default=list, blank=True)  # JSONField：JSON格式
+    severity = models.CharField(max_length=50)  # CharField：短文本
+
+    class Meta:
+        db_table = 'code'
+        # 指定数据库表名
+
+
+class IPConfig(models.Model):
+    """
+    单独表，用于存储系统当前 Dify 服务 IP，所有用户均可操作。
+    """
+    ip_address = models.CharField(max_length=45)
+    updated_at = models.DateTimeField(auto_now=True)  # auto_now=True，保存时自动设置时间
+
+    class Meta:
+        db_table = 'dify_ip_config'
+        verbose_name = 'Dify IP 配置'
+        verbose_name_plural = 'Dify IP 配置'
+        ordering = ['-updated_at']

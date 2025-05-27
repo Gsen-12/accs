@@ -5,10 +5,16 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg.views import get_schema_view
 from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
     UserModificationView, PasswordChangeView, TempAvatarUploadView, CreateGroupView, InvitationCodeview, \
-    AssignGroupView, JoinGroupView, JoinConfirmView
+    AssignGroupView, JoinGroupView, JoinConfirmView, AnalyzeCodeView, AnalysisHistoryView
 from django.conf import settings
 from django.conf.urls.static import static
 from accs.views import FileUploadView
+from .views import (
+    AnalyzeCodeView,
+    AnalysisHistoryView,
+
+)
+from . import views
 # from accs.views import AdminUserListView
 
 router = DefaultRouter()
@@ -38,12 +44,17 @@ urlpatterns = [
     # path('swagger/', schema_view.with_ui('swagger', cache_timeout=0)),
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
-    path('file/upload/', FileUploadView.as_view(), name='file-upload'),
+    path('upload-code/', FileUploadView.as_view(), name='file-upload'),
     # path('call/dify/',DifyView.as_view(),name='call-dify'),
     path('group/create/', CreateGroupView.as_view(),name='create-group'),
     path('group/invite_code/', InvitationCodeview.as_view(),name='invite-code'),
     path('assign/', AssignGroupView.as_view(),name='assign-group'),
     path('group/join/', JoinGroupView.as_view(),name='join-group'),
     path('confirm/join/', JoinConfirmView.as_view(),name='confirm-join'),
+    path('analyze/', AnalyzeCodeView.as_view(), name='analyze-code'),
+    path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
+    path('current-dify-ip/', views.current_dify_ip, name='current-dify-ip'),
+    path('set-dify-ip/', views.set_dify_ip, name='set-dify-ip'),
+    path('upload-code/', views.upload_code, name='upload-code'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

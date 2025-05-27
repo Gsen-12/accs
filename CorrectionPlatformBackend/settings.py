@@ -25,6 +25,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-l(p6l6(s+lf1r4p^7#b=w7-x06(s@@k&ni1$8rms!3y*ev^7+('
 
+DIFY_API_KEY = "app-11Fj3lplB04apHgxWmuDxP1V"  # Dify钥匙
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
@@ -44,7 +46,7 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600
 # if 'cgi' not in sys.modules:
 #     import legacy_cgi as cgi
 #     sys.modules['cgi'] = cgi
-APPEND_SLASH=False
+APPEND_SLASH = False
 
 INSTALLED_APPS = [
     'corsheaders',
@@ -74,7 +76,8 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = ['http://192.168.101.57:5666',
                         "http://127.0.0.1:5666",
-                        'http://192.168.101.69:3000']
+                        'http://192.168.101.69:3000',
+                        'http://192.168.101.40']
 
 CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie
 
@@ -117,8 +120,8 @@ DATABASES = {
         "PASSWORD": "123456",
         "HOST": "127.0.0.1",
         "PORT": "3306",
-        "CHARSET": "utf8mb4"
-    }
+        "CHARSET": "utf8mb4",
+    },
 
 }
 
@@ -128,7 +131,7 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        #'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.AllowAny',
         'rest_framework.permissions.IsAuthenticated',
     ]
 }
@@ -159,7 +162,7 @@ SIMPLE_JWT = {
 MIDDLEWARE.insert(0, 'corsheaders.middleware.CorsMiddleware')
 
 CACHES = {
-    'default':{
+    'default': {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": "redis://@127.0.0.1:6379/1",
         "KEY_PREFIX": "cache",  # 追加前缀双重保险
@@ -178,7 +181,7 @@ CACHES = {
         },
         "KEY_PREFIX": "jwt_"
     },
-    "invitation":{
+    "invitation": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": "redis://@127.0.0.1:6379/3",
         "OPTIONS": {
@@ -250,7 +253,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Shanghai'
 
 USE_I18N = True
 
@@ -271,11 +274,10 @@ FINAL_AVATAR_DIR = 'avatars'
 AVATAR_ROLLBACK_TTL = 86400  # 回滚有效期24小时
 
 TEMP_FILE_DIR = 'tmp/files'  # 临时存储目录
-FINAL_FILE_DIR = 'files'     # 正式存储目录
-FILE_ROLLBACK_TTL = 86400    # 文件回滚有效期(24小时)
-MAX_FILE_SIZE = 104857600    # 100MB文件大小限制
-ALLOWED_FILE_TYPES = ['pdf', 'docx', 'xlsx',"py"]  # 允许的文件类型
-DIFY_API_KEY = os.getenv('app-uMcRADhYaBLnJCbByBIsjG8r')
+FINAL_FILE_DIR = 'files'  # 正式存储目录
+FILE_ROLLBACK_TTL = 86400  # 文件回滚有效期(24小时)
+MAX_FILE_SIZE = 104857600  # 100MB文件大小限制
+ALLOWED_FILE_TYPES = ['pdf', 'docx', 'xlsx', "py"]  # 允许的文件类型
 
 DIFY_UPLOAD_URL = "https://192.168.101.69/v1/chat-messages"
 

@@ -1,5 +1,3 @@
-import random
-import string
 
 from django.core.validators import FileExtensionValidator
 from django.contrib.auth.models import User, Permission
@@ -8,7 +6,7 @@ from accs.models import Roles, UserFile, UserInfo, Group, GroupAssignment
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from PIL import Image
-
+from .models import AnalysisResult
 
 def validate_image_content(value):
     """
@@ -220,4 +218,24 @@ class GroupSerializer(serializers.ModelSerializer):
         return value
 
 
+class AnalysisSerializer(serializers.ModelSerializer):
+    # 覆盖 timestamp 字段，指定输出日期时间格式
+    timestamp = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",  # 年-月-日 时:分:秒
+        read_only=True               # 因为这是 auto_now_add，所以只读
+    )
+
+    class Meta:
+        model = AnalysisResult
+        fields = [
+            'vulnerabilities',
+            'errors',
+            'code_smells',
+            'accepted_issues',
+            'duplicates',
+            'timestamp',
+            'type',
+            'severity',
+            # 如果有 user 字段也要列出来
+        ]
 

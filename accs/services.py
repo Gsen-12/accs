@@ -1,0 +1,171 @@
+# accs_project/dify/services.py
+import netifaces
+import requests
+import json
+from django.conf import settings
+import re
+from .models import IPConfig
+import datetime
+
+
+class DifyService:
+
+    @staticmethod
+    def get_current_host_ip():
+        # 从数据库获取最新一条 IP 配置，否则返回 默认值：localhost
+        latest = IPConfig.objects.order_by('-updated_at').first()
+        ip = latest.ip_address if latest else 'localhost'
+        print(f"[get_current_host_ip] 从数据库取到的 IP 是：{ip}")  # 打印 数据库IP
+        return ip
+
+    @classmethod
+    def get_api_url(cls):
+        # dify后端API
+        # host_ip：数据库提取IP，默认值localhost
+        host_ip = cls.get_current_host_ip()
+        url = f"http://{host_ip}/v1/chat-messages"
+        print(f"[get_api_url]：{url}")
+        return url
+
+    @classmethod
+    def analyze_code(cls, code_content):
+        # 调用Dify的请求头
+        headers = {
+            "Authorization": f"Bearer {settings.DIFY_API_KEY}",  # Dify_key在settings
+            "Content-Type": "application/json"
+        }
+
+        # 调用Dify的格式，阻塞模式
+        payload = {
+            "inputs": {},
+            # 学生输入的代码
+            "query": code_content,
+            "response_mode": "blocking",
+            "conversation_id": "",
+            # 跟Dify对话的用户名，后续可用学生id
+            "user": "django_backend",
+
+            # 文件上传部分
+            # "files": [
+            #     {
+            #         "type": "image",
+            #         "transfer_method": "remote_url",
+            #         "url": "https://cloud.dify.ai/logo/logo-site.png"
+            #     }
+            # ]
+        }
+        try:
+            # 从get_api_url拿URL
+            url = cls.get_api_url()
+            print(f"Dify API: {url}")
+            response = requests.post(url, headers=headers, json=payload)
+            print("response:", response)
+            resp_json = response.json()
+            # 处理报错
+            if isinstance(resp_json, dict) and resp_json.get('status') not in (None, 200):
+                time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')    # 打印报错时间
+                print(time)
+                return {
+                    'error_message': resp_json.get('message', 'Unknown error'),
+                    'status': resp_json.get('status'),
+                }
+
+            # 打印原始响应
+            print("\n" + "=" * 50 + " 原始响应内容 " + "=" * 50)
+            # print(response.text)
+            print("resp_json:", resp_json)
+            print("=" * 120 + "\n")
+
+            # 检测HTTP状态码
+            response.raise_for_status()
+            return cls._handle_response(resp_json)
+        except Exception as e:
+            # 一般为Dify_Api错误,或者Dify未启动
+            # return None
+            print(f"API请求失败: {e}")
+            # 如果是 HTTPError，有可能 response.json() 已经包含 code/message/status
+            try:
+                err = response.json()
+                return {
+                    'error_message': err.get('message', str(e)),
+                    'status': err.get('status', response.status_code),
+                }
+            except:
+                # 一般网络异常等，返回通用错误
+                return {
+                    'error_message': str(e),
+                    'status': getattr(response, 'status', None) or 500,
+                }
+
+    '''
+    @classmethod
+    def _handle_response(cls, response_data):
+        try:
+            # 处理可能的Markdown格式
+            raw_answer = response_data.get('answer', '{}').replace('```json', '').replace('```', '')
+            parsed_data = json.loads(raw_answer)
+
+            # 数据提取路径修正
+            analysis_data = parsed_data.get('data', {})
+            analysis_summary = analysis_data.get('analysis_summary', {})
+            metadata = analysis_data.get('metadata', {})
+
+            return {
+                'vulnerabilities': int(analysis_summary.get('vulnerabilities', 0)),
+                'errors': int(analysis_summary.get('errors', 0)),
+                'code_smells': int(analysis_summary.get('code_smells', 0)),
+                'accepted_issues': int(analysis_summary.get('accepted_issues', 0)),
+                'duplicates': int(analysis_summary.get('duplicates', 0)),
+                'timestamp': metadata.get('timestamp', ''),
+                'type': analysis_data.get('type', ''),
+                'severity': metadata.get('severity', '')
+            }
+
+        except Exception as e:
+            print(f"Dify数据解析失败: {str(e)}")
+            raise
+            '''
+
+    @classmethod
+    def _handle_response(cls, response_data):
+        try:
+            raw_answer = response_data.get('answer', '{}')
+            # 处理可能的markdown格式
+            raw_answer = re.sub(r"```json?|```", '', raw_answer)
+            print("处理后的内容：", raw_answer)
+            parsed = json.loads(raw_answer)
+            # 返回数据转换
+            return {
+                'vulnerabilities': int(parsed.get('vulnerabilities', 0)),
+                'errors': int(parsed.get('errors', 0)),
+                'code_smells': int(parsed.get('code_smells', 0)),
+                'accepted_issues': int(parsed.get('accepted_issues', 0)),
+                'duplicates': int(parsed.get('duplicates', 0)),
+                'type': parsed.get('type', []),
+            }
+        except Exception as e:
+            print(f"Dify数据转换失败: {e}")
+            raise
+
+
+# 自定义IP
+def is_private_ip(ip):
+    patterns = [r'^10\.', r'^172\.(1[6-9]|2\d|3[0-1])\.', r'^192\.168\.']
+    return any(re.match(p, ip) for p in patterns)
+
+
+# 获取可靠本地 IP 的函数
+def get_reliable_local_ip():
+    priority = ['eth0', 'en0', 'enp0s3', 'wlan0']
+    for iface in priority + netifaces.interfaces():
+        if iface in priority or not re.match(r'^(lo|docker|veth)', iface):
+            try:
+                addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+                print(addrs)
+                if addrs:
+                    ip = addrs[0]['addr']
+                    if is_private_ip(ip):
+                        return ip
+            except Exception:
+                continue
+    return '未找到局域网 IP'

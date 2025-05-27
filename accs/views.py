@@ -9,7 +9,6 @@ from django.http import JsonResponse
 from django_redis import get_redis_connection
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -17,7 +16,13 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 from seafileapi import SeafileAPI
-
+import re
+from rest_framework.decorators import api_view
+from .models import AnalysisResult
+from .serializers import AnalysisSerializer
+from rest_framework.permissions import AllowAny
+from .services import DifyService, get_reliable_local_ip
+from .models import IPConfig
 from CorrectionPlatformBackend.settings import repo_id, login_name, server_url, pwd
 from accs.models import Roles, UserInfo, Group, GroupAssignment
 from accs.permissions import IsSuperAdmin, IsTeacher
@@ -154,6 +159,7 @@ class MyCustomBackend(TokenObtainPairView):
             user = User.objects.get(Q(username=username) | Q(email=username))
             if user.check_password(password):
                 return user
+            return None
         except Exception as e:
             return None
 
@@ -182,12 +188,13 @@ class CreateGroupView(APIView):
             }, status=status.HTTP_201_CREATED)
         return Response(group_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 class AssignGroupView(APIView):
     permissions_classes = [IsTeacher]
 
     @staticmethod
     def post(request):
-        if not {'user_id','group_id'}.issubset(request.data):
+        if not {'user_id', 'group_id'}.issubset(request.data):
             return Response({"message": "缺少必填字段"}, status=400)
         user_id = request.data.get('user_id')
         group_id = request.data.get('group_id')
@@ -203,6 +210,7 @@ class AssignGroupView(APIView):
         except User.DoesNotExist:
             return Response({"code": 404, "message": "用户不存在"}, status=404)
         except Group.DoesNotExist:
+
             return Response({"code": 404, "message": "班级不存在"}, status=404)
         try:
             assignment, created = GroupAssignment.objects.get_or_create(
@@ -224,6 +232,7 @@ class AssignGroupView(APIView):
         except Exception as e:
             return Response({"code": 500, "error": str(e)}, status=500)
 
+
 class InvitationCodeview(APIView):
     permissions_classes = [IsTeacher]
 
@@ -235,14 +244,14 @@ class InvitationCodeview(APIView):
             invitation_code = uuid.uuid4().hex[:8]
             redis_conn = get_redis_connection("invitation")
             redis_conn.setex(
-                name= group_id,
-                time= 3600,  # 1小时回滚有效期
+                name=group_id,
+                time=3600,  # 1小时回滚有效期
                 value=json.dumps(invitation_code)
             )
             return Response({
                 "code": 200,
                 "error": f"获取邀请码成功",
-                'data':{invitation_code}
+                'data': {invitation_code}
             }, status=200)
         except Exception as e:
             return Response({
@@ -250,21 +259,22 @@ class InvitationCodeview(APIView):
                 "error": f"获取邀请码失败：{str(e)}"
             }, status=500)
 
+
 class JoinGroupView(APIView):
     permissions_classes = [IsAuthenticated]
 
     @staticmethod
     def post(request):
-        if not {'group_id','invitation_code'}.issubset(request.data):
+        if not {'group_id', 'invitation_code'}.issubset(request.data):
             return Response({"message": "缺少必填字段"}, status=400)
         redis_conn = get_redis_connection('invitation')
         stored_code = redis_conn.get(request.data['group_id'])
 
         if not stored_code:
             return Response({
-                'code':404,
-                'message':'邀请码已过期'
-            },status=404)
+                'code': 404,
+                'message': '邀请码已过期'
+            }, status=404)
         if request.data['invitation_code'] != json.loads(stored_code):
             return Response({
                 "code": 403,
@@ -279,9 +289,9 @@ class JoinGroupView(APIView):
             if existing_assignments.exists():
                 return Response({
                     'code': 409,
-                    'message': '您已加入其他班级，确认要覆盖吗？',
+                    'message': '您已加入其他班级或已在本班级中，确认要覆盖吗？',
                     'existing_groups': [
-                        str(ass.groupId) for ass in existing_assignments# 遍历查询集提取班级ID
+                        str(ass.groupId) for ass in existing_assignments  # 遍历查询集提取班级ID
                     ]
                 }, status=409)
             assignment, created = GroupAssignment.objects.get_or_create(
@@ -289,20 +299,20 @@ class JoinGroupView(APIView):
                 groupId=request.data['group_id'],
                 defaults={
                     'userId': request.user.id,
-                    'groupId':request.data['group_id'],
+                    'groupId': request.data['group_id'],
                 }
             )
             if not created:
                 return Response({
                     'code': 406,
-                    'message':'已在本班级中'
-                },status=406)
+                    'message': '已在本班级中'
+                }, status=406)
             return Response({
-                'code':200,
-                'data':{
-                    'group_id':request.data['group_id'],
+                'code': 200,
+                'data': {
+                    'group_id': request.data['group_id'],
                 }
-            },status=200)
+            }, status=200)
         except Exception as e:
             return Response({"code": 500, "error": str(e)}, status=500)
 
@@ -326,7 +336,9 @@ class JoinConfirmView(APIView):
             )
             return Response({'code': 200, 'message': '班级覆盖成功'})
 
-        return Response({'code': 406, 'message': '取消覆盖操作'}, status=406)
+        if request.data['confirm'] == 'false':
+            return Response({'code': 406, 'message': '取消覆盖操作'}, status=406)
+
 
 class CurrentUserView(RetrieveAPIView):
     serializer_class = UserSerializer
@@ -397,13 +409,9 @@ class UserModificationView(APIView):
 
                     repo = seafile_api.get_repo(repo_id)
 
-                    file_path = os.path.join("/ava", final_filename)
-
-                    temp_path = os.path.join("/ava", temp_filename)
                     if final_filename in [x["name"] for x in repo.list_dir("/ava")]:
                         repo.delete_file(path)
                     repo.rename_file(seafile_path, final_filename)
-                    seafile_file_uploaded = True
                     user_info = UserInfo.objects.get(userId=user.id)
                     user_info.avatar = f'{server_url}/files/{repo_id}{final_filename}'
                     user_info.save()
@@ -437,8 +445,6 @@ class UserModificationView(APIView):
         except Exception as e:
             return Response(user_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        # TODO: email 检测重复, 检测修改后的内容是否符合规范,完成后取消下方注释,头像修改逻辑,完成后,直接拿到地址,赋给下方avatar
-
 
 class TempAvatarUploadView(APIView):
     permission_classes = [IsAuthenticated]
@@ -470,13 +476,11 @@ class TempAvatarUploadView(APIView):
                 repo.delete_file(seafile_path)
             repo.upload_file("/ava", temp_file_path)
 
-
             # 构造文件访问URL
             avatar_url = f"{server_url.rstrip('/')}/avatar/{repo_id}{seafile_path}"
 
             # 用户头像信息
             user_info = UserInfo.objects.get(userId=user.id)
-            old_avatar = user_info.avatar
             user_info.avatar = avatar_url
             user_info.save()
 
@@ -521,6 +525,7 @@ class PasswordChangeView(APIView):
         redis_conn.delete(f"access_{user.id}", f"refresh_{user.id}")
 
         return Response({"code": 200, "message": "密码修改成功"})
+
 
 class AdminRoleView(APIView):
     permission_classes = [IsSuperAdmin]
@@ -587,6 +592,7 @@ class AdminRoleModificationView(APIView):
 class FileUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+
     def post(self, request):
         user = request.user
         user_file = request.FILES.get('file')
@@ -633,3 +639,173 @@ class FileUploadView(APIView):
                 "error": f"上传失败：{str(e)}"
             }, status=500)
 
+
+class AnalyzeCodeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            print("学生输入的内容:", request.data)
+            raw_input = request.data.get('code', '')
+            md_matches = re.findall(r"```(?:[\w+-]*\n)?([\s\S]*?)```", raw_input)
+            code = md_matches[0] if md_matches else raw_input
+            # 重试调用
+            # result_data = None
+            result_data = DifyService.analyze_code(code)
+            print("result_data=", result_data)
+            # —— 如果 service 层返回了错误信息，直接返回给前端 ——
+            if isinstance(result_data, dict) and 'error_message' in result_data:
+                raw_msg = result_data['error_message']
+                http_status = result_data['status']
+                print('http_status:', http_status)
+                if raw_msg == 'Access token is invalid':
+                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
+                elif raw_msg == "The app's API service has been disabled.":
+                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
+                elif 'Server Unavailable Error' in raw_msg or 'Network is unreachable' in raw_msg:
+                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
+                else:
+                    detail = f"【系统提示】{raw_msg}，如果问题仍然存在，请联系管理员。"
+                return Response(
+                    {
+                        'detail': detail,
+                    },
+                    status=result_data.get(status, status.HTTP_503_SERVICE_UNAVAILABLE),
+                )
+            last_exception = None
+            # 调用三次Dify再返回报错
+            for attempt in range(1, 4):
+                try:
+                    url = DifyService.get_api_url()
+                    print(f"Attempt {attempt} to DifyService at {url}")
+                    result_data = DifyService.analyze_code(code)
+                    if result_data is not None:
+                        break
+                except Exception as ex:
+                    last_exception = ex
+            if result_data is None:
+                raise Exception(f"DifyService尝试3次失败: {last_exception}")
+
+            # 处理type，可能为多个
+            raw_type = result_data.get('type', [])
+            print("type:", raw_type)
+            if isinstance(raw_type, list):
+                # 列表转为字符串，元素间用逗号分隔
+                type_str = ', '.join(raw_type)
+            else:
+                # 已经是字符串，直接用
+                type_str = raw_type
+            print("type_str:", type_str)
+
+            # ---取出各项指标---
+            # 漏洞
+            vul = result_data.get('vulnerabilities', 0)
+            # 错误
+            err = result_data.get('errors', 0)
+            # 异味
+            smells = result_data.get('code_smells', 0)
+            # 已接收问题
+            accepted = result_data.get('accepted_issues', 0)
+            # 重复
+            dup = result_data.get('duplicates', 0)
+
+            # 计算 severity
+            def compute_severity(vul, err, smells, accepted, dup):
+                # 加权：漏洞×5，错误×3，异味×2，其它×1
+                score = vul * 5 + err * 3 + smells * 2 + accepted * 1 + dup * 1
+                if score == 0:
+                    return '完美'
+                elif score <= 10:
+                    return '轻度'
+                elif score <= 20:
+                    return '中度'
+                else:
+                    return '严重'
+
+            severity_value = compute_severity(vul, err, smells, accepted, dup)
+
+            # 规范数据
+            cleaned_data = {
+                'vulnerabilities': vul,
+                'errors': err,
+                'code_smells': smells,
+                'accepted_issues': accepted,
+                'duplicates': dup,
+                'type': type_str,
+                'severity': severity_value,
+                'user': request.user.id,
+            }
+            print("cleaned_data:", cleaned_data)
+
+            serializer = AnalysisSerializer(data=cleaned_data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+@api_view(['POST'])
+def upload_code(request):
+    """
+    接收前端上传的代码文件，读取其内容并返回给前端。
+    前端应使用 multipart/form-data，字段名为 'code_file'.
+    """
+    # 检查文件是否存在
+    uploaded_file = request.FILES.get('code_file')
+    if not uploaded_file:
+        return Response({'detail': '未上传任何文件'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 只允许一定扩展名，可根据需求扩展
+    allowed_ext = ['.js', '.py', '.java', '.cpp', '.cs', '.ts']
+    filename = uploaded_file.name
+    print(filename)
+    if not any(filename.endswith(ext) for ext in allowed_ext):
+        return Response({'detail': '不支持的文件类型'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        # 读取文件内容，注意可能需要指定编码
+        raw_bytes = uploaded_file.read()
+        try:
+            content = raw_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            content = raw_bytes.decode('latin-1')
+    except Exception as ex:
+        return Response({'detail': f'读取文件失败：{str(ex)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 返回文件内容到前端，用于填充 codeContent
+    return Response({'code_content': content}, status=status.HTTP_200_OK)
+
+
+# 自定义 Dify 服务 IP 地址
+@api_view(['POST'])
+def set_dify_ip(request):
+    ip_input = request.data.get('ip', '').strip()
+    print(ip_input)
+    # 简单 IP 格式校验
+    ip_pattern = r'^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$'
+    print(ip_pattern)
+    if not re.match(ip_pattern, ip_input):
+        return Response({'detail': '无效 IP 格式'}, status=400)
+    IPConfig.objects.update_or_create(
+        defaults={'ip_address': ip_input},
+        # 也可以加个固定的 key，如果你只想要一条记录
+        id=1
+    )
+    return Response({'current_ip': ip_input})
+
+
+# 获取并设置当前本机 IP 地址
+@api_view(['GET'])
+def current_dify_ip(request):
+    ip = get_reliable_local_ip()
+    return Response({'current_ip': ip})
+
+
+# 历史记录
+class AnalysisHistoryView(APIView):
+    def get(self, request):
+        queryset = AnalysisResult.objects.filter(user=request.user)
+        serializer = AnalysisSerializer(queryset, many=True)
+        return Response(serializer.data)
