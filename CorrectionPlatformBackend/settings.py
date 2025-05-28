@@ -27,6 +27,8 @@ SECRET_KEY = 'django-insecure-l(p6l6(s+lf1r4p^7#b=w7-x06(s@@k&ni1$8rms!3y*ev^7+(
 
 DIFY_API_KEY = "app-11Fj3lplB04apHgxWmuDxP1V"  # Dify钥匙
 
+DIFY_API_KEY_Answer = "app-yEuMAKEXktafdVXfJRrB1pwb"
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
@@ -77,7 +79,7 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = ['http://192.168.101.57:5666',
                         "http://127.0.0.1:5666",
                         'http://192.168.101.69:3000',
-                        'http://192.168.101.40']
+                        'http://192.168.101.32']
 
 CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie
 
@@ -196,9 +198,18 @@ CACHES = {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
         }
 
+    },
+
+    "answer": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://@127.0.0.1:6379/5",
+        "OPTIONS": {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            "DECODE_RESPONSES": True
+        }
+
     }
 }
-
 AUTHENTICATION_BACKENDS = (
     'accs.views.MyCustomBackend',
     'django.contrib.auth.backends.ModelBackend',

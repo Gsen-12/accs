@@ -3,6 +3,8 @@ import json
 import os
 import tempfile
 import uuid
+from linecache import cache
+
 from django.contrib.auth import authenticate, get_user_model
 from django.db.models import Q
 from django.http import JsonResponse
@@ -18,11 +20,10 @@ from rest_framework.permissions import IsAuthenticated
 from seafileapi import SeafileAPI
 import re
 from rest_framework.decorators import api_view
-from .models import AnalysisResult
+from .models import AnalysisResult, IPConfig
 from .serializers import AnalysisSerializer
 from rest_framework.permissions import AllowAny
-from .services import DifyService, get_reliable_local_ip
-from .models import IPConfig
+from .services import DifyService, get_reliable_local_ip, DifyAnswer
 from CorrectionPlatformBackend.settings import repo_id, login_name, server_url, pwd
 from accs.models import Roles, UserInfo, Group, GroupAssignment
 from accs.permissions import IsSuperAdmin, IsTeacher
@@ -809,3 +810,117 @@ class AnalysisHistoryView(APIView):
         queryset = AnalysisResult.objects.filter(user=request.user)
         serializer = AnalysisSerializer(queryset, many=True)
         return Response(serializer.data)
+
+
+class AnswerView(APIView):
+    def post(self, request):
+        user = request.user
+        try:
+            print("学生输入的内容:", request.data)
+            raw_input = request.data.get('code', '')
+            md_matches = re.findall(r"```(?:[\w+-]*\n)?([\s\S]*?)```", raw_input)
+            code = md_matches[0] if md_matches else raw_input
+            # 重试调用
+            # result_data = None
+            result_data = DifyAnswer.analyze_code(code)
+            print("result_data=", result_data)
+            # —— 如果 service 层返回了错误信息，直接返回给前端 ——
+            if isinstance(result_data, dict) and 'error_message' in result_data:
+                raw_msg = result_data['error_message']
+                http_status = result_data['status']
+                print('http_status:', http_status)
+                if raw_msg == 'Access token is invalid':
+                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
+                elif raw_msg == "The app's API service has been disabled.":
+                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
+                elif 'Server Unavailable Error' in raw_msg or 'Network is unreachable' in raw_msg:
+                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
+                else:
+                    detail = f"【系统提示】{raw_msg}，如果问题仍然存在，请联系管理员。"
+                return Response(
+                    {
+                        'detail': detail,
+                    },
+                    status=result_data.get(status, status.HTTP_503_SERVICE_UNAVAILABLE),
+                )
+            last_exception = None
+            # 调用三次Dify再返回报错
+            for attempt in range(1, 4):
+                try:
+                    url = DifyAnswer.analyze_code(url)
+                    print(f"Attempt {attempt} to DifyService at {url}")
+                    result_data = DifyService.analyze_code(code)
+                    if result_data is not None:
+                        break
+                except Exception as ex:
+                    last_exception = ex
+            if result_data is None:
+                raise Exception(f"DifyService尝试3次失败: {last_exception}")
+
+            # 规范数据
+            cleaned_data = {
+                'correct_code': result_data.get('correct_code', ''),
+                'description': result_data.get('description', '')
+            }
+            print("cleaned_data:", cleaned_data)
+
+            redis_url = f"{cleaned_data}"
+
+            redis_conn = get_redis_connection('answer')
+            redis_conn.setex(
+                name=f"{user.id}_file_upload",
+                time=604800,  # 7天
+                value=json.dumps(cleaned_data)
+            )
+            return Response(status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class TeaAnswerView(APIView):
+    def post(self, request):
+        userId = request.data.get('userId')
+        try:
+            if not {'userId'}.issubset(request.data):
+                return Response({"message": "缺少必填字段"}, status=400)
+            cache_key = f'{userId}_file_upload'
+            redis_conn = get_redis_connection("answer")
+            cache_value = redis_conn.get(cache_key)
+            if not cache_value:
+                return Response({"code": 404, "message": "无缓存数据"})
+
+            if isinstance(cache_value, bytes):
+                decoded_str = cache_value.decode('utf-8')
+            else:
+                decoded_str = cache_value
+
+            # 兼容旧数据格式（如果存在单引号问题）
+            if decoded_str.startswith("'") and decoded_str.endswith("'"):
+                decoded_str = decoded_str.strip("'")
+
+            # 解析JSON
+            try:
+                parsed_data = json.loads(decoded_str)
+            except json.JSONDecodeError:
+                # 处理可能存在的转义字符问题
+                decoded_str = decoded_str.replace('\\n', '\n').replace('\\"', '"')
+                parsed_data = json.loads(decoded_str)
+
+            # 提取字段并处理换行符
+            correct_code = parsed_data.get('correct_code', '').replace('\\n', '\n')
+            description = parsed_data.get('description', '').replace('\\n', '\n')
+            print('老师查看AI批改:', parsed_data)
+
+            return Response({
+                "code": 200,
+                "data": {
+                    'correct_code': correct_code,
+                    'description': description
+                }
+            }, status=status.HTTP_200_OK)  # 修改为200状态码
+
+        except Exception as e:
+            return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+

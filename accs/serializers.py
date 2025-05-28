@@ -1,4 +1,3 @@
-
 from django.core.validators import FileExtensionValidator
 from django.contrib.auth.models import User, Permission
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -7,6 +6,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from PIL import Image
 from .models import AnalysisResult
+
 
 def validate_image_content(value):
     """
@@ -79,7 +79,6 @@ class UserSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(required=True)
     repo_id = serializers.CharField(required=False)
 
-
     class Meta:
         model = User
         fields = [
@@ -104,7 +103,6 @@ class UserSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         user = User.objects.create_user(**validated_data, id=self.context.get("id"))
         return user
-
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
@@ -181,6 +179,7 @@ class AvatarUploadSerializer(serializers.Serializer):
             raise ValidationError("仅支持JPEG/PNG格式")
         return value
 
+
 class AssignGroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = GroupAssignment
@@ -188,6 +187,7 @@ class AssignGroupSerializer(serializers.ModelSerializer):
             'userId',
             'groupId',
         ]
+
 
 class GroupSerializer(serializers.ModelSerializer):
     class Meta:
@@ -199,7 +199,7 @@ class GroupSerializer(serializers.ModelSerializer):
             'study_groups',
         ]
         extra_kwargs = {
-            'GroupId' : {'required': False}
+            'GroupId': {'required': False}
         }
 
     def get_id(self):
@@ -222,7 +222,7 @@ class AnalysisSerializer(serializers.ModelSerializer):
     # 覆盖 timestamp 字段，指定输出日期时间格式
     timestamp = serializers.DateTimeField(
         format="%Y-%m-%d %H:%M:%S",  # 年-月-日 时:分:秒
-        read_only=True               # 因为这是 auto_now_add，所以只读
+        read_only=True  # 因为这是 auto_now_add，所以只读
     )
 
     class Meta:
@@ -238,4 +238,6 @@ class AnalysisSerializer(serializers.ModelSerializer):
             'severity',
             # 如果有 user 字段也要列出来
         ]
+
+
 

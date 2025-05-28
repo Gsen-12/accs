@@ -118,3 +118,4 @@ class IPConfig(models.Model):
         verbose_name = 'Dify IP 配置'
         verbose_name_plural = 'Dify IP 配置'
         ordering = ['-updated_at']
+

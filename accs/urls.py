@@ -5,13 +5,14 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg.views import get_schema_view
 from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
     UserModificationView, PasswordChangeView, TempAvatarUploadView, CreateGroupView, InvitationCodeview, \
-    AssignGroupView, JoinGroupView, JoinConfirmView, AnalyzeCodeView, AnalysisHistoryView
+    AssignGroupView, JoinGroupView, JoinConfirmView, AnalyzeCodeView, AnalysisHistoryView, TeaAnswerView
 from django.conf import settings
 from django.conf.urls.static import static
 from accs.views import FileUploadView
 from .views import (
     AnalyzeCodeView,
     AnalysisHistoryView,
+    AnswerView
 
 )
 from . import views
@@ -56,5 +57,7 @@ urlpatterns = [
     path('current-dify-ip/', views.current_dify_ip, name='current-dify-ip'),
     path('set-dify-ip/', views.set_dify_ip, name='set-dify-ip'),
     path('upload-code/', views.upload_code, name='upload-code'),
+    path('answer/', AnswerView.as_view(), name='answer'),
+    path('tea/answer/', TeaAnswerView.as_view(), name='tea-answer'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
