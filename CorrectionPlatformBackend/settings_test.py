@@ -1,0 +1,18 @@
+from pathlib import Path
+
+# import sys
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": "ACCS",
+        "USER": "root",
+        "PASSWORD": "123456",
+        "HOST": "127.0.0.1",
+        "PORT": "3306",
+        "CHARSET": "utf8mb4",
+    },
+
+}

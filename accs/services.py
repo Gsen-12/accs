@@ -144,7 +144,7 @@ class DifyAnswer:
 
     @classmethod
     def analyze_code(cls, code_content):
-        url = 'http://192.168.101.44/v1/chat-messages'
+        url = 'http://192.168.101.50/v1/chat-messages'
         # 调用Dify的请求头
         headers = {
             "Authorization": f"Bearer app-uzS2iFDn2VLVAznB2KogZRWq",  # Dify_key在settings

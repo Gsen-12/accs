@@ -1,7 +1,7 @@
 from django.core.validators import FileExtensionValidator
 from django.contrib.auth.models import User, Permission
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from accs.models import Roles, UserFile, UserInfo, Group, GroupAssignment
+from accs.models import Roles, UserInfo, Group, GroupAssignment, StuAssignment, DepartmentMajor
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from PIL import Image
@@ -57,7 +57,7 @@ class UserInfoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UserInfo
-        fields = ['userId', 'desc', 'homePath', 'avatar', 'realName', 'role_id', 'gender', 'repo_id']
+        fields = ['userId', 'desc', 'homePath', 'avatar', 'realName', 'role_id', 'gender', 'pri_repo_id', 'pub_repo_id']
 
     def create(self, validated_data):
         userinfo = UserInfo.objects.create(**validated_data, userId=self.context.get("userId"))
@@ -77,13 +77,14 @@ class UserSerializer(serializers.ModelSerializer):
     token = serializers.CharField(read_only=True)
     gender = serializers.IntegerField(read_only=True)
     email = serializers.EmailField(required=True)
-    repo_id = serializers.CharField(required=False)
+    pri_repo_id = serializers.CharField(required=False)
+    pub_repo_id = serializers.CharField(required=False)
 
     class Meta:
         model = User
         fields = [
             'id', 'username', 'password', 'email', 'userId', 'desc', 'homePath', 'avatar', 'realName', 'role_id',
-            'token', 'gender', 'repo_id'
+            'token', 'gender', 'pri_repo_id', 'pub_repo_id'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -148,12 +149,18 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     #     return access_token
 
 
-class FileUploadSerializer(serializers.ModelSerializer):
+class StuUploadSerializer(serializers.ModelSerializer):
     class Meta:
-        model = UserFile
-        fields = ['file']
+        model = StuAssignment
+        fields = [
+            'stuId',
+            'username',
+            'groupname'
+        ]
         extra_kwargs = {
-            'file': {'write_only': True}
+            'stuId': {'required': False},
+            'username': {'required': False},
+            'groupname': {'required': False},
         }
 
 
@@ -187,6 +194,18 @@ class AssignGroupSerializer(serializers.ModelSerializer):
             'userId',
             'groupId',
         ]
+
+
+class DepartmentMajorSerializer(serializers.ModelSerializer):
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",  # 年-月-日 时:分:秒
+        read_only=True  # 因为这是 auto_now_add，所以只读
+    )
+
+    class Meta:
+        model = DepartmentMajor
+        fields = ['id', 'department', 'major', 'created_at']
+        read_only_fields = ['id', 'created_at']
 
 
 class GroupSerializer(serializers.ModelSerializer):
@@ -238,6 +257,3 @@ class AnalysisSerializer(serializers.ModelSerializer):
             'severity',
             # 如果有 user 字段也要列出来
         ]
-
-
-

@@ -63,14 +63,22 @@ class UserFile(models.Model):
 class Group(models.Model):
     GroupId = models.IntegerField(primary_key=True)
     school = models.CharField(max_length=255, null=True)
-    college = models.CharField(max_length=255, null=True)
     specialty = models.CharField(max_length=255, null=True)
+    college = models.CharField(max_length=255, null=True)
     study_groups = models.CharField(max_length=100, verbose_name="班级名称")
 
 
 class GroupAssignment(models.Model):
     userId = models.CharField(max_length=255)
-    groupId = models.CharField(max_length=255)
+    study_groups = models.CharField(max_length=255)
+    specialty = models.CharField(max_length=255, null=True)
+    college = models.CharField(max_length=255, null=True)
+
+
+class StuAssignment(models.Model):
+    stuId = models.CharField(max_length=100, null=True)
+    username = models.CharField(max_length=255)
+    groupname = models.CharField(max_length=255)
 
 
 class UserInfo(models.Model):
@@ -88,7 +96,8 @@ class UserInfo(models.Model):
     role_id = models.IntegerField(null=False)
     GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
     gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
-    repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
+    pub_repo_id = models.CharField(max_length=255,null=True,default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
+    pri_repo_id = models.CharField(max_length=255,null=True)
 
 
 class AnalysisResult(models.Model):
@@ -119,3 +128,40 @@ class IPConfig(models.Model):
         verbose_name_plural = 'Dify IP 配置'
         ordering = ['-updated_at']
 
+
+class DepartmentMajor(models.Model):
+    department = models.CharField("院系", max_length=100)
+    major = models.CharField("专业", max_length=100)
+    created_at = models.DateTimeField("创建时间", auto_now_add=True)
+
+    class Meta:
+        db_table = 'department_major'
+        verbose_name = '院系-专业'
+        verbose_name_plural = '院系-专业'
+        unique_together = ('department', 'major')  # 保证院系+专业不重复
+
+    def __str__(self):
+        return f"{self.department} - {self.major}"
+
+
+class Student(models.Model):
+    student_id = models.CharField("学号", max_length=50, unique=True, db_index=True)
+    name = models.CharField("姓名", max_length=50)
+    class_name = models.CharField("班级", max_length=50)
+    department_major = models.ForeignKey(
+        DepartmentMajor,
+        on_delete=models.PROTECT,
+        verbose_name="院系-专业",
+        related_name="students"
+    )
+    created_at = models.DateTimeField("创建时间", auto_now_add=True)
+    updated_at = models.DateTimeField("更新时间", auto_now=True)
+
+    class Meta:
+        db_table = 'student'
+        verbose_name = '学生'
+        verbose_name_plural = '学生'
+        ordering = ['student_id']
+
+    def __str__(self):
+        return f"{self.student_id} - {self.name}"

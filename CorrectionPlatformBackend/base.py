@@ -105,28 +105,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'CorrectionPlatformBackend.wsgi.application'
 
-# Database
-# https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-
-'''DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}'''
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": "ACCS",
-        "USER": "root",
-        "PASSWORD": "123456",
-        "HOST": "127.0.0.1",
-        "PORT": "3306",
-        "CHARSET": "utf8mb4",
-    },
-
-}
-
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'accs.authentication.CustomJWTAuthentication',
@@ -302,14 +280,6 @@ ALLOWED_FILE_TYPES = ['pdf', 'docx', 'xlsx', "py"]  # 允许的文件类型
 
 DIFY_UPLOAD_URL = "https://192.168.101.69/v1/chat-messages"
 
-# SEAFILE_CONFIG = {
-#     'API_BASE': 'https://seafile.accs.rabbitmind.net',  # Seafile服务地址
-#     'API_TOKEN': 'b9493568a48c5d8c6bcf3fe83d89eefd9177d257',         # 管理员API令牌
-#     'AVATAR_REPO_ID': 'ad457d57-2577-4686-89b7-4f69c8a5195c',       # 专门存储头像的文件库ID
-#     'UPLOAD_URL': '/api2/repos/{repo_id}/upload-link/',
-#     'FILE_URL_TEMPLATE': '{repo_id}/files?p=/{file_path}',  # 需在代码中传入实际 repo_id
-#     # 'AVATAR_DIR' : '/ava'  # 存储目录
-# }
 
 SEAFILE_CONFIG = {
     'API_BASE': 'https://seafile.accs.rabbitmind.net',
@@ -321,4 +291,3 @@ SEAFILE_CONFIG = {
 server_url = "https://seafile.accs.rabbitmind.net/"
 login_name = "accs@admin.com"
 pwd = "accs@Aa"
-

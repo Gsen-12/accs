@@ -3,11 +3,10 @@ import json
 import os
 import tempfile
 import uuid
-from linecache import cache
-
+import pandas as pd
 from django.contrib.auth import authenticate, get_user_model
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import JsonResponse, FileResponse
 from django_redis import get_redis_connection
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -17,22 +16,28 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
-from seafileapi import SeafileAPI
+from seafileapi import SeafileAPI, Repo
 import re
 from rest_framework.decorators import api_view
-from .models import AnalysisResult, IPConfig
-from .serializers import AnalysisSerializer
+from sqlalchemy import create_engine
+from CorrectionPlatformBackend import settings
+from CorrectionPlatformBackend.base import login_name, pwd, server_url
+from .models import AnalysisResult, IPConfig, StuAssignment, DepartmentMajor, Student
+from .serializers import AnalysisSerializer, DepartmentMajorSerializer
 from rest_framework.permissions import AllowAny
 from .services import DifyService, get_reliable_local_ip, DifyAnswer
-from CorrectionPlatformBackend.settings import repo_id, login_name, server_url, pwd
 from accs.models import Roles, UserInfo, Group, GroupAssignment
 from accs.permissions import IsSuperAdmin, IsTeacher
 from accs.serializers import UserSerializer, UserInfoSerializer, RolesSerializer, \
     validate_image_content, GroupSerializer
-from rest_framework.parsers import MultiPartParser, FormParser
-from accs.utils.middleware import UUIDTools
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
+from .utils.middleware import UUIDTools
 
 User = get_user_model()
+
+seafile_api = SeafileAPI(login_name, pwd, server_url)
+seafile_api.auth()  # 认证
 
 
 def csrf_failure(request, reason=""):
@@ -44,6 +49,7 @@ class RegisterView(APIView):
 
     @staticmethod
     def post(request):
+        username = request.data.get('username')
         if not {'username', 'password', 'role_id', 'gender'}.issubset(request.data):
             return Response({"message": "缺少必填字段"}, status=400)
         if len(request.data['password']) < 8:
@@ -53,8 +59,22 @@ class RegisterView(APIView):
         if user_serializer.is_valid():
             if request.data.get('role_id') is not None:
                 user_serializer.save()
+                try:
+                    repo = seafile_api.create_repo(username)
+                    pri_repo_id = repo.repo_id
+                    print(pri_repo_id)
+                    user_info_data = request.data.copy()
+                    user_info_data['pri_repo_id'] = pri_repo_id
+
+                except Exception as e:
+                    return Response({
+                        "error": f"创建私人库失败: {str(e)}"
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                userinfo_data = request.data.copy()
+                userinfo_data['pri_repo_id'] = pri_repo_id
+
                 userinfo_serializer = UserInfoSerializer(
-                    data=request.data,
+                    data=userinfo_data,
                     context={'userId': user_serializer.get_id()},
                     partial=True
                 )
@@ -68,6 +88,8 @@ class RegisterView(APIView):
                         },
                         "message": "注册成功"
                     }, status=status.HTTP_201_CREATED)
+                else:
+                    return Response(userinfo_serializer.errors, status=400)
 
             else:
                 return Response(
@@ -165,6 +187,309 @@ class MyCustomBackend(TokenObtainPairView):
             return None
 
 
+class GenerateClassExcelView(APIView):
+    """
+    接收前端 JSON 数据，生成班级 Excel 并上传到 Seafile。
+    POST 数据格式示例：
+    {
+        "class": "高三3班",
+        "count": 30,
+        "department": "信息工程学院",
+        "major": "计算机科学与技术"
+    }
+    Excel 内容：
+    A1: 院系：<department>   B1: 专业：<major>
+    A2: 学号              B2: 姓名
+    A3~A(N+2): 1~N         B3~B(N+2): 空
+    """
+
+    def post(self, request):
+        data = request.data
+        user = request.user
+
+        # 读取并校验字段
+        cls = data.get('class', '')
+        count = data.get('count')
+        dept = data.get('department', '')
+        major = data.get('major', '')
+
+        try:
+            count = int(count)
+            if count < 0:
+                raise ValueError
+        except Exception:
+            return Response({'detail': '学生人数必须为非负整数'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not DepartmentMajor.objects.filter(department=dept, major=major).exists():
+            return Response(
+                {'detail': '指定的院系与专业组合在不存在'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 构造表格行
+        rows = []
+        # 第一行：院系、专业、班级
+        rows.append([f'院系：{dept}', f'专业：{major}', f'班级：{cls}'])
+        # 第二行：学号、姓名、（空）
+        rows.append(['学号', '姓名', ''])
+        # 后续行：学号1~count，姓名和班级列留空
+        for i in range(1, count + 1):
+            rows.append([i, '', ''])
+
+        # 将行列表转换为 DataFrame，三列布局
+        df = pd.DataFrame(rows)
+
+        # 写入 Excel 文件
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        filename = f"{timestamp}_class_list.xlsx"
+        temp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(temp_dir, filename)
+        seafile_api = SeafileAPI(login_name, pwd, server_url)
+        seafile_api.auth()
+        repo = seafile_api.get_repo(repo_id)
+        base = f"{server_url.rstrip('/')}"
+        file_url = f"{base}/file/{repo_id}/result/{filename}"
+        local_save_path = "/ACCS/accs/files/" + filename
+        print(file_url)
+        try:
+            df.to_excel(file_path, header=False, index=False)
+        except ModuleNotFoundError:
+            return Response({'detail': 'openpyxl 未安装，无法生成 Excel'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({'detail': f'生成Excel失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 上传到 Seafile
+        try:
+            repo.upload_file('/result', file_path)
+        except Exception as e:
+            return Response({'detail': f'Seafile 上传失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        try:
+            repo.download_file(file_path, local_save_path)
+        except Exception as e:
+            return Response({'datail': f'seafile 下载失败:{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            # 清理临时文件
+            try:
+                os.remove(file_path)
+                os.rmdir(temp_dir)
+            except:
+                pass
+
+        return Response({'file_url': file_url}, status=status.HTTP_201_CREATED)
+
+
+class DepartmentMajorView(APIView):
+    """
+    接收前端 POST 上传的 JSON：{'department': '信息工程学院', 'major': '计算机科学与技术'}
+    将其存入 DepartmentMajor 表，并返回序列化后的记录。
+    """
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def post(self, request):
+        serializer = DepartmentMajorSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class ParseFilledExcelView(APIView):
+    """
+    接收前端上传的已填写姓名的 Excel（Multipart），
+    解析并返回包含 [班级, 院系, 专业, 学号, 姓名] 的 JSON 列表，供前端确认。
+    Excel 格式要求：
+      A1: 院系：<department>    B1: 专业：<major>    C1: 班级：<class>
+      A2: 学号                 B2: 姓名             C2: （空）
+      A3~A(N+2): 1~N            B3~B(N+2): 姓名      C3~C(N+2): （空）
+    """
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request):
+        excel_file = request.FILES.get('file')
+        if not excel_file:
+            return Response({'detail': '未上传文件'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            # 1. 将上传文件写入临时文件
+            temp_dir = tempfile.mkdtemp()
+            filename = f"filled_{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}.xlsx"
+            file_path = os.path.join(temp_dir, filename)
+            with open(file_path, 'wb') as f:
+                for chunk in excel_file.chunks():
+                    f.write(chunk)
+
+            # 2. 用 pandas 读取，无表头，header=None
+            df = pd.read_excel(file_path, header=None, dtype=str)
+
+            # 3. 解析第一行
+            # A1 格式 “院系：...”，B1 “专业：...”，C1 “班级：...”
+            try:
+                dept_cell = str(df.iat[0, 0]).strip()
+                major_cell = str(df.iat[0, 1]).strip()
+                class_cell = str(df.iat[0, 2]).strip()
+                if not dept_cell.startswith('院系：') or not major_cell.startswith('专业：') or not class_cell.startswith(
+                        '班级：'):
+                    raise ValueError
+                department = dept_cell.split('：', 1)[1]
+                major = major_cell.split('：', 1)[1]
+                class_name = class_cell.split('：', 1)[1]
+            except Exception:
+                return Response({'detail': '第一行格式不正确，应为“院系：...”、“专业：...”、“班级：...”'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # 4. 校验 DepartmentMajor 存在
+            try:
+                deptmajor = DepartmentMajor.objects.get(department=department, major=major)
+            except DepartmentMajor.DoesNotExist:
+                return Response({'detail': '指定的院系与专业组合在数据库中不存在'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 5. 第二行应为 “学号”、“姓名”、“”（C列可忽略）
+            if str(df.iat[1, 0]).strip() != '学号' or str(df.iat[1, 1]).strip() != '姓名':
+                return Response({'detail': '第二行应为“学号”、“姓名”'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 6. 从第 3 行开始提取学号和姓名
+            students = []
+            for idx in range(2, len(df)):
+                sid = str(df.iat[idx, 0]).strip()
+                name = str(df.iat[idx, 1]).strip()
+                if not sid or not name:
+                    continue  # 只处理非空行
+                students.append({
+                    'student_id': sid,
+                    'name': name,
+                    'class_name': class_name,
+                    'department': department,
+                    'major': major
+                })
+
+            # 7. 清理临时文件
+            try:
+                os.remove(file_path)
+                os.rmdir(temp_dir)
+            except:
+                pass
+
+            if not students:
+                return Response({'detail': '未检测到有效的学号和姓名行'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 返回供前端预览确认
+            return Response({'students': students}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({'detail': f'解析失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class SaveStudentsView(APIView):
+    """
+    步骤 3：接收前端确认后的 JSON 列表，将每个学生写入数据库。
+    请求 JSON 格式：
+      {
+        "students": [
+          {
+            "student_id": "2025001",
+            "name": "张三",
+            "class_name": "高三3班",
+            "department": "信息工程学院",
+            "major": "计算机科学与技术"
+          },
+          ...
+        ]
+      }
+    返回 JSON：
+      {
+        "saved": [
+          {"student_id": "2025001", "created": true},
+          ...
+        ],
+        "errors": [
+          {"student_id": "2025002", "detail": "院系-专业不存在"},
+          ...
+        ]
+      }
+    """
+    parser_classes = [JSONParser]
+
+    def post(self, request):
+        data = request.data.get('students')
+        if not isinstance(data, list) or not data:
+            return Response({'detail': 'students 列表不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        saved = []
+        errors = []
+        for rec in data:
+            sid = rec.get('student_id')
+            name = rec.get('name')
+            class_name = rec.get('class_name')
+            department = rec.get('department')
+            major = rec.get('major')
+
+            if not all([sid, name, class_name, department, major]):
+                errors.append({'student_id': sid, 'detail': '字段不完整'})
+                continue
+
+            try:
+                deptmajor = DepartmentMajor.objects.get(department=department, major=major)
+            except DepartmentMajor.DoesNotExist:
+                errors.append({'student_id': sid, 'detail': '院系-专业不存在'})
+                continue
+
+            # update_or_create：学号已存在则更新，否则插入
+            student, created = Student.objects.update_or_create(
+                student_id=sid,
+                defaults={
+                    'name': name,
+                    'class_name': class_name,
+                    'department_major': deptmajor
+                }
+            )
+            saved.append({'student_id': sid, 'created': created})
+
+        return Response({'saved': saved, 'errors': errors}, status=status.HTTP_200_OK)
+
+
+class AddStuidView(APIView):
+    @staticmethod
+    def get(request):
+        file = open(os.path.dirname(os.path.abspath(__file__)) + '/ACCS/accs/files/人员信息.xlsx', 'rb')
+        response = FileResponse(file)
+        response['Content-Type'] = 'application/octet-stream'
+        response['Content-Disposition'] = 'attachment;filename="excel_test.xlsx"'
+        return response
+
+    def post(self, request):
+        excel_file = request.data.get('file')
+        if not {'file'}.issubset(request.data):
+            return Response({"message": "缺少必填字段"}, status=400)
+        try:
+            df = pd.read_excel(excel_file, engine='openpyxl')
+            column_mapping = {
+                "学号": "stuId",
+                "姓名": "username",
+                "班级": "study_groups",
+                "专业": "specialty",
+                "院系": "college"
+            }
+            df = df.rename(columns=column_mapping)
+            table_name = StuAssignment._meta.db_table
+            engine = create_engine(
+                f"mysql+mysqldb://{settings.DATABASES['default']['USER']}:"
+                f"{settings.DATABASES['default']['PASSWORD']}@"
+                f"{settings.DATABASES['default']['HOST']}:"
+                f"{settings.DATABASES['default']['PORT']}/"
+                f"{settings.DATABASES['default']['NAME']}"
+            )
+            df.to_sql(table_name, engine, if_exists='replace', index=False)
+            return Response({
+                "code": status.HTTP_201_CREATED,
+                "message": "数据导入成功"
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response({
+                "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "error": f"上传失败：{str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class CreateGroupView(APIView):
     permission_classes = [IsSuperAdmin]
 
@@ -191,28 +516,29 @@ class CreateGroupView(APIView):
 
 
 class AssignGroupView(APIView):
-    permissions_classes = [IsTeacher]
+    permission_classes = [IsAuthenticated, IsTeacher]
 
     @staticmethod
     def post(request):
-        if not {'user_id', 'group_id'}.issubset(request.data):
-            return Response({"message": "缺少必填字段"}, status=400)
         user_id = request.data.get('user_id')
         group_id = request.data.get('group_id')
-        if request.user.userinfo.role_id == 2:
-            return Response({"code": 404, "message": "用户为老师"}, status=404)
-        # if request.user.userinfo.role_id == 3:
+        if not {'user_id', 'group_id'}.issubset(request.data):
+            return Response({"message": "缺少必填字段"}, status=400)
 
         try:
-            user = User.objects.get(id=user_id)
-            if request.user.userinfo.role_id == 2:
-                return Response({"code": 404, "message": "用户为老师"}, status=404)
-            group = Group.objects.get(GroupId=group_id)
+            user_info = UserInfo.objects.get(userId=user_id)
+            print(user_info)
+
+            print(user_info.role_id)
+            if user_info.role_id == 2:
+                return Response({"code": 403, "message": "用户为老师"}, status=403)
+            if user_info.role_id == 3:
+                return Response({"code": 403, "message": "用户为管理员"}, status=403)
         except User.DoesNotExist:
-            return Response({"code": 404, "message": "用户不存在"}, status=404)
+            return Response({"code": 403, "message": "用户不存在"}, status=403)
         except Group.DoesNotExist:
 
-            return Response({"code": 404, "message": "班级不存在"}, status=404)
+            return Response({"code": 403, "message": "班级不存在"}, status=403)
         try:
             assignment, created = GroupAssignment.objects.get_or_create(
                 userId=user_id,
@@ -235,7 +561,7 @@ class AssignGroupView(APIView):
 
 
 class InvitationCodeview(APIView):
-    permissions_classes = [IsTeacher]
+    permission_classes = [IsTeacher, IsAuthenticated]
 
     @staticmethod
     def post(request):
@@ -645,6 +971,16 @@ class AnalyzeCodeView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        user = request.user
+        user_id = user.id
+        group_id = GroupAssignment.objects.get(userId=user_id).groupId
+        print('group_id:', group_id)
+
+        if not group_id:
+            return Response({
+                "code": 500,
+                "error": "您没有班级，请去加入班级再来提交"
+            }, status=403)
         try:
             print("学生输入的内容:", request.data)
             raw_input = request.data.get('code', '')
@@ -738,13 +1074,28 @@ class AnalyzeCodeView(APIView):
             }
             print("cleaned_data:", cleaned_data)
 
-            serializer = AnalysisSerializer(data=cleaned_data)
-            if not serializer.is_valid():
-                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            redis_conn = get_redis_connection('analyze')
+            redis_conn.setex(
+                name=f"{group_id}_{user.id}_file_upload",
+                time=604800,  # 7天
+                value=json.dumps(cleaned_data)
+            )
+            return Response(status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+@api_view(['POST'])
+def set_save_analyze(request):
+    groupId = request.data.get('groupId')
+    redis_conn = get_redis_connection("analyze")
+    value = [x.decode() for x in redis_conn.keys() if x.decode().split('_')[0] == groupId]
+    cleaned_data = value
+    serializer = AnalysisSerializer(data=cleaned_data)  # 用不了
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    serializer.save()
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
@@ -812,10 +1163,18 @@ class AnalysisHistoryView(APIView):
         return Response(serializer.data)
 
 
-class AnswerView(APIView):
+class AddAnswerView(APIView):
     def post(self, request):
         user = request.user
+        user_id = user.id
+        group_id = GroupAssignment.objects.get(userId=user_id).groupId
+        if not group_id:
+            return Response({
+                "code": 500,
+                "error": "您没有班级，请去加入班级再来提交"
+            }, status=403)
         try:
+
             print("学生输入的内容:", request.data)
             raw_input = request.data.get('code', '')
             md_matches = re.findall(r"```(?:[\w+-]*\n)?([\s\S]*?)```", raw_input)
@@ -868,7 +1227,7 @@ class AnswerView(APIView):
 
             redis_conn = get_redis_connection('answer')
             redis_conn.setex(
-                name=f"{user.id}_file_upload",
+                name=f"{group_id}_{user.id}_file_upload",
                 time=604800,  # 7天
                 value=json.dumps(cleaned_data)
             )
@@ -879,17 +1238,31 @@ class AnswerView(APIView):
 
 
 class TeaAnswerView(APIView):
-    def post(self, request):
-        userId = request.data.get('userId')
+    def get(self, request):
+        redis_conn = get_redis_connection("answer")
+        group_id = request.data.get('group_id')
         try:
-            if not {'userId'}.issubset(request.data):
+            value = [x.decode() for x in redis_conn.keys() if x.decode().split('_')[0] == group_id]
+            print(value)
+            cache_value = " ".join(value)
+            return Response({
+                'code': 200,
+                'cache_value': cache_value,
+            })
+        except Exception as e:
+            return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        group_id = request.data.get('group_id')
+        try:
+            if not {'user_id'}.issubset(request.data):
                 return Response({"message": "缺少必填字段"}, status=400)
-            cache_key = f'{userId}_file_upload'
+            cache_key = f'{group_id}_{user_id}_file_upload'
             redis_conn = get_redis_connection("answer")
             cache_value = redis_conn.get(cache_key)
             if not cache_value:
                 return Response({"code": 404, "message": "无缓存数据"})
-
             if isinstance(cache_value, bytes):
                 decoded_str = cache_value.decode('utf-8')
             else:
@@ -916,7 +1289,8 @@ class TeaAnswerView(APIView):
                 "code": 200,
                 "data": {
                     'correct_code': correct_code,
-                    'description': description
+                    'description': description,
+                    'message': '是否保存？',
                 }
             }, status=status.HTTP_200_OK)  # 修改为200状态码
 
@@ -924,3 +1298,230 @@ class TeaAnswerView(APIView):
             return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
+class AnswerConfirmView(APIView):
+    def post(self, request):
+        group_id = request.data.get('group_id')
+        user_id = request.data.get('user_id')
+        if not {'user_id', 'confirm'}.issubset(request.data):
+            return Response({"code": 400, "message": "缺少必要参数"}, status=400)
+        if request.data['confirm'] == 'revise':
+            results = request.data.get('results')
+            cache_key = f'{group_id}_{user_id}_file_upload'
+            redis_conn = get_redis_connection("answer")
+            redis_conn.set(cache_key, results)
+            return Response({
+                'code': 200,
+                'data': {
+                    '学生': user_id,
+                    "修改结果": results,
+                }
+            }, status=status.HTTP_200_OK)
+        if request.data['confirm'] == 'again':
+            return Response({
+                "code": 200,
+                "data": {
+                    'message': '跳转ai生成',
+                }
+            }, status=status.HTTP_200_OK)
+        return Response({"code": 404, "message": "无缓存数据"}, status=404)
+
+
+class SaveExeclView(APIView):
+    def post(self, request):
+        execlname = request.data.get('execlname')
+        groupId = request.data.get('groupId')
+        seafile_path = f"/result/{execlname}.xlsx"
+        if not {'groupId'}.issubset(request.data):
+            return Response({"code": 400, "message": "缺少必要参数"}, status=400)
+        if not {"execlname"}.issubset(request.data):
+            return Response({"code": 400, "message": "请为表格命名"}, status=400)
+        redis_conn = get_redis_connection("answer")
+        print('redis_conn:', redis_conn)
+        value = [x.decode() for x in redis_conn.keys() if x.decode().split('_')[0] == groupId]
+        print('value', value)
+
+        cache_value = " ".join(value)
+        keys = redis_conn.mget(value)
+        print('01', keys)
+        user = request.groupId if request.groupId.is_authenticated else None
+        print('user:', user)
+        queryset = redis_conn.objects
+        print('queryset:', queryset)
+        if user:
+            queryset = queryset.filter(groupId=groupId)
+        result_obj = queryset.order_by('groupId')
+        print('result_obj:', result_obj)
+        if not result_obj:
+            return Response({'detail': '未找到分析结果'}, status=status.HTTP_404_NOT_FOUND)
+
+        # 3. 将结果字段存入 DataFrame
+        data = {
+            'correct_code': result_obj.correct_code,
+            'description': result_obj.description,
+        }
+
+        df = pd.DataFrame([data])
+        print('df:', df)
+
+        # 4. 写入 Excel
+        table_filename = f"{execlname}.xlsx"
+        temp_dir = tempfile.mkdtemp()
+        table_path = os.path.join(temp_dir, table_filename)
+        try:
+            df.to_excel(table_path, index=False)
+        except Exception as e:
+            return Response({'detail': f'生成表格失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 1) 使用 pandas 创建 DataFrame，把返回 JSON 放入第一格
+        df = pd.DataFrame([[data]], columns=['hhh'])
+        table_filename = f"{execlname}.xlsx"
+        table_path = os.path.join(temp_dir, table_filename)
+        df.to_excel(table_path, index=False)
+
+        try:
+            # 2) 上传表格到 Seafile
+            seafile_api = SeafileAPI(login_name, pwd, server_url)
+            seafile_api.auth()
+            repo = seafile_api.get_repo(repo_id)
+
+            # 上传表格文件
+            repo.upload_file('/result', table_path)
+
+            # 构造访问 URL
+            base = f"{server_url.rstrip('/')}"
+            table_url = f"{base}/{repo_id}/result/{table_filename}"
+
+            return Response({
+                'table_file_url': table_url,
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response({'detail': f'Seafile 上传失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        finally:
+            # 清理本地临时目录
+            try:
+                os.remove(table_path)
+                os.rmdir(temp_dir)
+            except:
+                pass
+# @api_view(['POST'])
+# def set_save_execl(request):
+#     try:
+#         userId = request.data.get('userId')
+#         study_groups = request.data.get('study_groups')
+#         filename = f"{study_groups}_file_upload.xlsx"
+#         seafile_path = f"/result/{study_groups}_file_upload.xlsx"  # Seafile中的存储路径
+#         if not userId:
+#             return Response({"message": "缺少必填字段: userId"}, status=400)
+#
+#         # 获取 Redis 数据
+#         cache_key = f'{userId}_file_upload'
+#         redis_conn = get_redis_connection("answer")
+#         cache_value = redis_conn.get(cache_key)
+#
+#         if not cache_value:
+#             return Response({"code": 404, "message": "无缓存数据"}, status=404)
+#
+#         # 解析数据
+#         decoded_str = cache_value.decode('utf-8').strip("'")  # 兼容旧格式
+#         data = json.loads(decoded_str)
+#         correct_code = data.get('correct_code', '').replace('\\n', '\n')
+#         description = data.get('description', '').replace('\\n', '\n')
+#
+#         # --- 生成 Excel 的逻辑 ---
+#         # 创建空 DataFrame 初始化 Excel
+#         buffer = BytesIO()
+#         pd.DataFrame().to_excel(buffer, index=False, engine='openpyxl')
+#
+#         # 使用 openpyxl 操作单元格
+#         buffer.seek(0)
+#         wb = load_workbook(buffer)
+#         ws = wb.active
+#
+#         # 写入 A1: 用户ID
+#         ws['A1'] = f"用户ID: {userId}"
+#
+#         # 写入 A2: 合并代码和描述
+#         combined_content = f"修正后的代码：\n{correct_code}\n\n修改说明：\n{description}"
+#         ws['A2'] = combined_content
+#
+#         # 设置样式
+#         ws.column_dimensions['A'].width = 100  # 列宽
+#         ws.row_dimensions[2].height = 300  # A2 行高
+#         for cell in ['A1', 'A2']:
+#             ws[cell].alignment = Alignment(
+#                 wrap_text=True,
+#                 vertical='top',
+#                 horizontal='left'
+#             )
+#
+#         # 保存到缓冲流
+#         buffer = BytesIO()
+#         wb.save(buffer)
+#         buffer.seek(0)
+#
+#         save_dir = os.path.join(settings.BASE_DIR, 'file')  # 项目根目录/file
+#         os.makedirs(save_dir, exist_ok=True)  # 自动创建目录
+#
+#         # 生成唯一文件名（用户ID + 时间戳）
+#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#         filename = f"user_{userId}_code_{timestamp}.xlsx"
+#         file_path = os.path.join(save_dir, filename)
+#
+#         # 写入文件
+#         with open(file_path, 'wb') as f:
+#             f.write(buffer.getvalue())
+#
+#         try:
+#             seafile_api = SeafileAPI(login_name, pwd, server_url)
+#             seafile_api.auth()  # 认证
+#
+#             # 获取仓库对象
+#             repo = seafile_api.get_repo(repo_id)
+#
+#             # 创建临时目录保存文件（确保文件名正确）
+#             dir = tempfile.mkdtemp()
+#             file_path = os.path.join(dir, filename)
+#
+#             with open(file_path, 'wb') as temp_file:
+#                 for chunk in user_file.chunks():
+#                     temp_file.write(chunk)
+#
+#             # 上传到Seafile
+#             if filename in [x["name"] for x in repo.list_dir("/file")]:
+#                 repo.delete_file(seafile_path)
+#             repo.upload_file("/file", file_path)
+#
+#             # 构造文件访问URL
+#             file_url = f"{server_url.rstrip('/')}/file/{repo_id}{seafile_path}"
+#
+#             redis_conn = get_redis_connection("file")
+#             redis_conn.setex(
+#                 name=f"{user.id}_file_upload",
+#                 time=360000,
+#                 value=json.dumps(file_url)
+#             )
+#
+#             return Response({
+#                 "code": 200,
+#                 "message": "文件上传成功"
+#             })
+#         except Exception as e:
+#             return Response({
+#                 "code": 500,
+#                 "error": f"上传失败：{str(e)}"
+#             }, status=500)
+#
+#         # 返回 Excel 文件给用户下载
+#         response = HttpResponse(
+#             buffer.getvalue(),
+#             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+#         )
+#         response['Content-Disposition'] = f'attachment; filename="{filename}"'
+#         return response
+#
+#     except json.JSONDecodeError:
+#         return Response({"code": 500, "message": "数据解析失败"}, status=500)
+#     except Exception as e:
+#         return Response({"code": 503, "message": str(e)}, status=503)

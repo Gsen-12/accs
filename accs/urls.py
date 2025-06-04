@@ -5,14 +5,15 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg.views import get_schema_view
 from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
     UserModificationView, PasswordChangeView, TempAvatarUploadView, CreateGroupView, InvitationCodeview, \
-    AssignGroupView, JoinGroupView, JoinConfirmView, AnalyzeCodeView, AnalysisHistoryView, TeaAnswerView
+    AssignGroupView, JoinGroupView, JoinConfirmView, AnalyzeCodeView, AnalysisHistoryView, TeaAnswerView, SaveExeclView, \
+    AddStuidView, GenerateClassExcelView, ParseFilledExcelView, DepartmentMajorView
 from django.conf import settings
 from django.conf.urls.static import static
 from accs.views import FileUploadView
 from .views import (
     AnalyzeCodeView,
     AnalysisHistoryView,
-    AnswerView
+    AddAnswerView
 
 )
 from . import views
@@ -57,7 +58,13 @@ urlpatterns = [
     path('current-dify-ip/', views.current_dify_ip, name='current-dify-ip'),
     path('set-dify-ip/', views.set_dify_ip, name='set-dify-ip'),
     path('upload-code/', views.upload_code, name='upload-code'),
-    path('answer/', AnswerView.as_view(), name='answer'),
+    path('answer/', AddAnswerView.as_view(), name='answer'),
     path('tea/answer/', TeaAnswerView.as_view(), name='tea-answer'),
+    path('save/execl/', SaveExeclView.as_view(), name='save-execl'),
+    path('save/analyze/', views.set_save_analyze, name='save-analyze'),
+    path('add/stuid/', AddStuidView.as_view(), name='add-stuid'),
+    path('generate/excel/', GenerateClassExcelView.as_view(), name='generate-excel'),
+    path('admin/department/major/', DepartmentMajorView.as_view(), name='admin-department-major'),
+    path('parsefille/excel', ParseFilledExcelView.as_view(), name='parsefille-Excel'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
