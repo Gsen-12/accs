@@ -16,7 +16,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
-from seafileapi import SeafileAPI, Repo
+from seafileapi import SeafileAPI
 import re
 from rest_framework.decorators import api_view
 from sqlalchemy import create_engine
@@ -61,6 +61,9 @@ class RegisterView(APIView):
                 user_serializer.save()
                 try:
                     repo = seafile_api.create_repo(username)
+                    repo.create_dir('/file')
+                    repo.create_dir('/ava')
+                    repo.create_dir('/result')
                     pri_repo_id = repo.repo_id
                     print(pri_repo_id)
                     user_info_data = request.data.copy()
@@ -198,83 +201,111 @@ class GenerateClassExcelView(APIView):
         "major": "计算机科学与技术"
     }
     Excel 内容：
-    A1: 院系：<department>   B1: 专业：<major>
-    A2: 学号              B2: 姓名
-    A3~A(N+2): 1~N         B3~B(N+2): 空
+    A1: 院系：<department>   B1: 专业：<major>   C1: 班级：<class>
+    A2: 学号              B2: 姓名   C2:（空）
+    A3~A(N+2): 1~N       B3~B(N+2): 空   C3~C(N+2): 空
     """
+
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def post(self, request):
         data = request.data
-        user = request.user
-
-        # 读取并校验字段
-        cls = data.get('class', '')
+        # 1. 读取并校验字段
+        cls_name = data.get('class', '').strip()
         count = data.get('count')
-        dept = data.get('department', '')
-        major = data.get('major', '')
+        dept = data.get('department', '').strip()
+        major = data.get('major', '').strip()
 
+        # 校验 count 是否为非负整数
         try:
             count = int(count)
             if count < 0:
                 raise ValueError
         except Exception:
-            return Response({'detail': '学生人数必须为非负整数'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if not DepartmentMajor.objects.filter(department=dept, major=major).exists():
             return Response(
-                {'detail': '指定的院系与专业组合在不存在'},
+                {'detail': f'学生人数 {count} 必须为非负整数'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 构造表格行
+        # 2. 判断院系+专业组合是否存在
+        try:
+            dep_major = DepartmentMajor.objects.get(department=dept, major=major)
+        except DepartmentMajor.DoesNotExist:
+            return Response(
+                {'detail': f'指定的院系“{dept}”与专业“{major}”组合不存在'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 3. 全局检查 class_name 是否已存在
+        existing_class = Class.objects.filter(class_name=cls_name).first()
+        if existing_class:
+            # 如果存在，找出它对应的院系+专业，告诉前端
+            dep_major_exist = DepartmentMajor.objects.get(id=existing_class.department_major_id)
+            exist_dept = dep_major_exist.department
+            exist_major = dep_major_exist.major
+            return Response(
+                {
+                    'detail': f'班级 “{cls_name}” 已在 “{exist_dept}” 院系的 “{exist_major}” 专业下存在，无法重复创建'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 4. 构造 Excel 行数据
         rows = []
         # 第一行：院系、专业、班级
-        rows.append([f'院系：{dept}', f'专业：{major}', f'班级：{cls}'])
-        # 第二行：学号、姓名、（空）
+        rows.append([f'院系：{dept}', f'专业：{major}', f'班级：{cls_name}'])
+        # 第二行：学号、姓名、（空列）
         rows.append(['学号', '姓名', ''])
-        # 后续行：学号1~count，姓名和班级列留空
+        # 后续行：学号从1到count，姓名和班级列留空
         for i in range(1, count + 1):
             rows.append([i, '', ''])
 
-        # 将行列表转换为 DataFrame，三列布局
         df = pd.DataFrame(rows)
 
-        # 写入 Excel 文件
-        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-        filename = f"{timestamp}_class_list.xlsx"
+        # 5. 写入临时 Excel
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        filename = f"{major}-{dept}-{cls_name}_{count}_{timestamp}_class_list.xlsx"
         temp_dir = tempfile.mkdtemp()
         file_path = os.path.join(temp_dir, filename)
+
+        # 这里假设 SeafileAPI、login_name、pwd、server_url、repo_id 等都已定义
         seafile_api = SeafileAPI(login_name, pwd, server_url)
         seafile_api.auth()
         repo = seafile_api.get_repo(repo_id)
         base = f"{server_url.rstrip('/')}"
         file_url = f"{base}/file/{repo_id}/result/{filename}"
-        local_save_path = "/ACCS/accs/files/" + filename
-        print(file_url)
+
         try:
+            # header=False, index=False：不写列名、不写行索引
             df.to_excel(file_path, header=False, index=False)
         except ModuleNotFoundError:
-            return Response({'detail': 'openpyxl 未安装，无法生成 Excel'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {'detail': 'openpyxl 未安装，无法生成 Excel'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         except Exception as e:
-            return Response({'detail': f'生成Excel失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {'detail': f'生成 Excel 失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
-        # 上传到 Seafile
+        # 6. 上传到 Seafile
         try:
             repo.upload_file('/result', file_path)
         except Exception as e:
-            return Response({'detail': f'Seafile 上传失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        try:
-            repo.download_file(file_path, local_save_path)
-        except Exception as e:
-            return Response({'datail': f'seafile 下载失败:{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {'detail': f'Seafile 上传失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         finally:
-            # 清理临时文件
+            # 清理临时目录和文件
             try:
                 os.remove(file_path)
                 os.rmdir(temp_dir)
             except:
                 pass
 
+        # 7. 返回前端文件地址
         return Response({'file_url': file_url}, status=status.HTTP_201_CREATED)
 
 
@@ -286,96 +317,326 @@ class DepartmentMajorView(APIView):
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def post(self, request):
+        department = request.data.get('department')
+        major = request.data.get('major')
+
+        if not major and not department:
+            return Response(
+                {'detail': '院系、专业字段不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not department:
+            return Response({'detail': '院系字段不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not major:
+            return Response({'detail': '专业字段不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if DepartmentMajor.objects.filter(department=department, major=major).exists():
+            return Response({'detail': '该院系和专业组合已经存在'}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing = DepartmentMajor.objects.filter(major=major).first()
+        if existing:
+            return Response(
+                {'detail': f'专业 “{major}” 已在 “{existing.department}” 院系下存在'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         serializer = DepartmentMajorSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         serializer.save()
+
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        department_majors = DepartmentMajor.objects.all()
+        data = [
+            {
+                'id': dm.id,
+                'department': dm.department,
+                'major': dm.major
+            }
+            for dm in department_majors
+        ]
+        return Response(data, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        dm_id = request.data.get('id')
+        if not dm_id:
+            return Response({'detail': '缺少 id 参数'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            dept_major = DepartmentMajor.objects.get(id=dm_id)
+            dept_major.delete()
+            return Response({'detail': '删除成功'}, status=status.HTTP_200_OK)
+        except DepartmentMajor.DoesNotExist:
+            return Response({'detail': '指定的院系-专业组合不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+    def put(self, request):
+        """
+        修改已有的院系-专业组合。
+        请求体 (application/json)：
+          {
+            "id": 5,
+            "department": "新的院系名称",
+            "major": "新的专业名称"
+          }
+        注意：department 和 major 至少传其中一个。id 必须对应已有记录。
+        """
+        dm_id = request.data.get('id')
+        new_dept = request.data.get('department')
+        new_major = request.data.get('major')
+
+        if not dm_id:
+            return Response({'detail': '缺少 id 参数'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not new_dept and not new_major:
+            return Response(
+                {'detail': 'department 和 major 至少传一个用于更新'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            dept_major = DepartmentMajor.objects.get(id=dm_id)
+        except DepartmentMajor.DoesNotExist:
+            return Response({'detail': '指定的院系-专业组合不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        # 更新字段前先检查新的 department+major 组合是否冲突
+        updated_dept = new_dept if new_dept is not None else dept_major.department
+        updated_major = new_major if new_major is not None else dept_major.major
+
+        # 如果新的组合和原来不一致，需要判断目标组合是否已存在
+        if (updated_dept != dept_major.department) or (updated_major != dept_major.major):
+            if DepartmentMajor.objects.filter(department=updated_dept, major=updated_major).exists():
+                return Response(
+                    {'detail': f'院系 "{updated_dept}" + 专业 "{updated_major}" 已存在，无法重复。'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # 执行更新
+        dept_major.department = updated_dept
+        dept_major.major = updated_major
+        dept_major.save()
+
+        return Response({
+            'id': dept_major.id,
+            'department': dept_major.department,
+            'major': dept_major.major
+        }, status=status.HTTP_200_OK)
 
 
 class ParseFilledExcelView(APIView):
     """
-    接收前端上传的已填写姓名的 Excel（Multipart），
-    解析并返回包含 [班级, 院系, 专业, 学号, 姓名] 的 JSON 列表，供前端确认。
-    Excel 格式要求：
-      A1: 院系：<department>    B1: 专业：<major>    C1: 班级：<class>
-      A2: 学号                 B2: 姓名             C2: （空）
-      A3~A(N+2): 1~N            B3~B(N+2): 姓名      C3~C(N+2): （空）
+    接收用户“写完姓名”的 Excel，解析并返回预览 JSON。
+    前端上传含姓名的 Excel（字段名 'file'，multipart/form-data）后，
+    后端会：
+      1. 检查第一行格式（“院系：...”、“专业：...”、“班级：...”）；
+      2. 校验该院系+专业在数据库中是否存在；
+      3. 检查第二行必须为“学号”、“姓名”；
+      4. 自第三行开始遍历：若学号或姓名有缺失，则记录该行错误；
+      5. 如果发现任何错误行，直接返回 400 + errors 列表；否则返回完整 students 列表供前端预览。
+    返回格式示例（包含错误时）：
+    {
+      "errors": [
+        {"row": 3, "detail": "学号或姓名缺失"},
+        {"row": 5, "detail": "学号或姓名缺失"}
+      ]
+    }
+    正常无误时返回：
+    {
+      "students": [
+        {
+          "student_id": "2025001",
+          "name": "张三",
+          "class_name": "高三3班",
+          "department": "信息工程学院",
+          "major": "计算机科学与技术"
+        },
+        ...
+      ]
+    }
     """
-    permission_classes = [IsSuperAdmin]
+    parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
         excel_file = request.FILES.get('file')
         if not excel_file:
             return Response({'detail': '未上传文件'}, status=status.HTTP_400_BAD_REQUEST)
+        # 1. 保存上传的 Excel 到临时目录
+        temp_dir = tempfile.mkdtemp()
+        intermediate_name = f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_upload.xlsx"
+        intermediate_path = os.path.join(temp_dir, intermediate_name)
+        with open(intermediate_path, 'wb') as f:
+            for chunk in excel_file.chunks():
+                f.write(chunk)
+
         try:
-            # 1. 将上传文件写入临时文件
-            temp_dir = tempfile.mkdtemp()
-            filename = f"filled_{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}.xlsx"
-            file_path = os.path.join(temp_dir, filename)
-            with open(file_path, 'wb') as f:
-                for chunk in excel_file.chunks():
-                    f.write(chunk)
+            # 2. 用 pandas 读取，无表头
+            df = pd.read_excel(intermediate_path, header=None, dtype=str)
 
-            # 2. 用 pandas 读取，无表头，header=None
-            df = pd.read_excel(file_path, header=None, dtype=str)
-
-            # 3. 解析第一行
-            # A1 格式 “院系：...”，B1 “专业：...”，C1 “班级：...”
+            # 3. 解析第一行：院系、专业、班级
             try:
-                dept_cell = str(df.iat[0, 0]).strip()
-                major_cell = str(df.iat[0, 1]).strip()
-                class_cell = str(df.iat[0, 2]).strip()
-                if not dept_cell.startswith('院系：') or not major_cell.startswith('专业：') or not class_cell.startswith(
-                        '班级：'):
+                # 取单元格原始值（此时是字符串或 None）
+                dept_cell = df.iat[0, 0]
+                major_cell = df.iat[0, 1]
+                class_cell = df.iat[0, 2]
+
+                # 先按空值判断；如果是 NaN 或 None 或空字符串，都视为缺失
+                if pd.isna(dept_cell) or pd.isna(major_cell) or pd.isna(class_cell):
+                    raise ValueError
+
+                dept_str = str(dept_cell).strip()
+                major_str = str(major_cell).strip()
+                class_str = str(class_cell).strip()
+                if (
+                        not dept_str.startswith('院系：') or
+                        not major_str.startswith('专业：') or
+                        not class_str.startswith('班级：')
+                ):
                     raise ValueError
                 department = dept_cell.split('：', 1)[1]
                 major = major_cell.split('：', 1)[1]
                 class_name = class_cell.split('：', 1)[1]
             except Exception:
-                return Response({'detail': '第一行格式不正确，应为“院系：...”、“专业：...”、“班级：...”'},
-                                status=status.HTTP_400_BAD_REQUEST)
+                os.remove(intermediate_path)
+                os.rmdir(temp_dir)
+                return Response(
+                    {'detail': '第一行格式不正确，应为“院系：...”、“专业：...”、“班级：...”'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-            # 4. 校验 DepartmentMajor 存在
+            # 4. 校验 DepartmentMajor 是否存在，并获取对应实例
             try:
                 deptmajor = DepartmentMajor.objects.get(department=department, major=major)
             except DepartmentMajor.DoesNotExist:
-                return Response({'detail': '指定的院系与专业组合在数据库中不存在'}, status=status.HTTP_400_BAD_REQUEST)
-
-            # 5. 第二行应为 “学号”、“姓名”、“”（C列可忽略）
-            if str(df.iat[1, 0]).strip() != '学号' or str(df.iat[1, 1]).strip() != '姓名':
-                return Response({'detail': '第二行应为“学号”、“姓名”'}, status=status.HTTP_400_BAD_REQUEST)
-
-            # 6. 从第 3 行开始提取学号和姓名
-            students = []
-            for idx in range(2, len(df)):
-                sid = str(df.iat[idx, 0]).strip()
-                name = str(df.iat[idx, 1]).strip()
-                if not sid or not name:
-                    continue  # 只处理非空行
-                students.append({
-                    'student_id': sid,
-                    'name': name,
-                    'class_name': class_name,
-                    'department': department,
-                    'major': major
-                })
-
-            # 7. 清理临时文件
-            try:
-                os.remove(file_path)
+                os.remove(intermediate_path)
                 os.rmdir(temp_dir)
-            except:
-                pass
+                return Response(
+                    {'detail': '指定的院系与专业组合在数据库中不存在'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
+            existing_class = Class.objects.filter(class_name=class_name).first()
+            if existing_class:
+                # 如果已存在同名班级，但它的 department_major 与当前解析到的不一致，就报错
+                if existing_class.department_major_id != deptmajor.id:
+                    dm_exist = DepartmentMajor.objects.get(id=existing_class.department_major_id)
+                    # 清理临时文件
+                    os.remove(intermediate_path)
+                    os.rmdir(temp_dir)
+                    return Response(
+                        {
+                            'detail': (
+                                f'班级 “{class_name}” 已在 '
+                                f'“{dm_exist.department} - {dm_exist.major}” 下存在，'
+                                f'无法在 “{department} - {major}” 下使用'
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # 5. 校验第二行：必须是“学号”、“姓名”
+            header_sid = df.iat[1, 0]
+            header_name = df.iat[1, 1]
+
+            # 空值判断
+            if pd.isna(header_sid) or pd.isna(header_name):
+                os.remove(intermediate_path)
+                os.rmdir(temp_dir)
+                return Response(
+                    {'detail': '第二行应为“学号”、“姓名”，且不能为空'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            sid_label = str(header_sid).strip()
+            name_label = str(header_name).strip()
+            if sid_label != '学号' or name_label != '姓名':
+                os.remove(intermediate_path)
+                os.rmdir(temp_dir)
+                return Response(
+                    {'detail': '第二行应为“学号”、“姓名”'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 6. 从第三行开始提取并校验学号和姓名
+            students = []
+            errors = []
+            for idx in range(2, len(df)):
+                row_num = idx + 1  # Excel 中的实际行号 (1-based)
+                cell_sid = df.iat[idx, 0]
+                cell_name = df.iat[idx, 1]
+                # 先判断是否缺失
+                if pd.isna(cell_sid) or pd.isna(cell_name):
+                    errors.append(
+                        {
+                            'row': f'第{row_num}行',
+                            'sid': f'学号：{int(row_num - 2)}号',
+                            'detail': '学号或姓名缺失'
+                        }
+                    )
+                    continue
+                sid = str(cell_sid).strip()
+                name = str(cell_name).strip()
+                # 如果转为字符串后还是空，也认为缺失
+                if not sid or not name:
+                    errors.append(
+                        {
+                            'row': f'第{row_num}行',
+                            'sid': f'学号：{int(row_num - 2)}号',
+                            'detail': '学号或姓名缺失'
+                        }
+                    )
+                else:
+                    students.append({
+                        'student_id': sid,
+                        'name': name,
+                        'class_name': class_name,
+                        'department': department,
+                        'major': major
+                    })
+
+            # 7. 如果有任何错误行，直接返回错误列表
+            if errors:
+                os.remove(intermediate_path)
+                os.rmdir(temp_dir)
+                return Response(
+                    {'errors': errors},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 8. 如果解析到的学生列表为空，也返回提示
             if not students:
-                return Response({'detail': '未检测到有效的学号和姓名行'}, status=status.HTTP_400_BAD_REQUEST)
+                os.remove(intermediate_path)
+                os.rmdir(temp_dir)
+                return Response(
+                    {'detail': '未检测到有效的学号和姓名行'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-            # 返回供前端预览确认
-            return Response({'students': students}, status=status.HTTP_200_OK)
+            # 9. 重命名临时文件：院系+专业+班级_提交时间_filled.xlsx
+            submit_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            safe_filename = f"{department}-{major}-{class_name}_{submit_time}_filled.xlsx"
+            new_path = os.path.join(temp_dir, safe_filename)
+            os.rename(intermediate_path, new_path)
+
+            # 10. 返回供前端预览确认
+            return Response(
+                {
+                    'students': students,
+                    'temp_file_path': new_path,
+                    'filename': safe_filename
+                },
+                status=status.HTTP_200_OK
+            )
 
         except Exception as e:
-            return Response({'detail': f'解析失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # 出现其它意外错误，清理并返回
+            if os.path.exists(intermediate_path):
+                os.remove(intermediate_path)
+            os.rmdir(temp_dir)
+            return Response(
+                {'detail': f'解析失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class SaveStudentsView(APIView):
@@ -409,41 +670,104 @@ class SaveStudentsView(APIView):
     parser_classes = [JSONParser]
 
     def post(self, request):
-        data = request.data.get('students')
-        if not isinstance(data, list) or not data:
+        students = request.data.get('students')
+        file_path = request.data.get('temp_file_path')
+        filename = request.data.get('filename')
+
+        if not isinstance(students, list) or not students:
             return Response({'detail': 'students 列表不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+        if not file_path or not filename:
+            return Response({'detail': '缺少 temp_file_path 或 filename'}, status=status.HTTP_400_BAD_REQUEST)
 
         saved = []
         errors = []
-        for rec in data:
+
+        for rec in students:
             sid = rec.get('student_id')
             name = rec.get('name')
             class_name = rec.get('class_name')
             department = rec.get('department')
             major = rec.get('major')
 
+            # 基本字段完整性校验
             if not all([sid, name, class_name, department, major]):
                 errors.append({'student_id': sid, 'detail': '字段不完整'})
                 continue
 
+            # 1. 校验院系+专业是否存在
             try:
                 deptmajor = DepartmentMajor.objects.get(department=department, major=major)
             except DepartmentMajor.DoesNotExist:
                 errors.append({'student_id': sid, 'detail': '院系-专业不存在'})
                 continue
 
-            # update_or_create：学号已存在则更新，否则插入
-            student, created = Student.objects.update_or_create(
-                student_id=sid,
-                defaults={
-                    'name': name,
-                    'class_name': class_name,
-                    'department_major': deptmajor
-                }
-            )
-            saved.append({'student_id': sid, 'created': created})
+            # 2. 在全局范围检查同名班级是否已存在
+            existing_class = Class.objects.filter(class_name=class_name).first()
+            if existing_class:
+                # 如果已存在，则判断它所属的院系+专业是否与当前记录一致
+                if existing_class.department_major_id != deptmajor.id:
+                    # 不同院系-专业下已有该班级，报错
+                    dm_exist = DepartmentMajor.objects.get(id=existing_class.department_major_id)
+                    errors.append({
+                        'student_id': sid,
+                        'detail': f'班级 “{class_name}” 已在 “{dm_exist.department}” 院系的 “{dm_exist.major}” 专业下存在，无法在 “{department} - {major}” 下创建'
+                    })
+                    continue
+                # 否则 existing_class 属于同一院系-专业，可以复用 existing_class
+                class_info = existing_class
+                created_class = False
+            else:
+                # 3. 如果全局未出现同名班级，则在当前院系-专业下新建
+                try:
+                    class_info, created_class = Class.objects.get_or_create(
+                        class_name=class_name,
+                        department_major=deptmajor
+                    )
+                except IntegrityError:
+                    # 理论上如果对 class_name 加了唯一性索引，这里可能捕获到冲突
+                    errors.append({
+                        'student_id': sid,
+                        'detail': f'班级 “{class_name}” 在 “{department} - {major}” 下已存在，无法重复创建'
+                    })
+                    continue
 
-        return Response({'saved': saved, 'errors': errors}, status=status.HTTP_200_OK)
+            # 4. 保存/更新学生记录
+            #    假设 Student 模型中有：student_id, name, class_info（ForeignKey to Class）
+            try:
+                student, created_student = Student.objects.update_or_create(
+                    student_id=sid,
+                    class_info=class_info,
+                    defaults={'name': name}
+                )
+                saved.append({'student_id': sid, 'created': created_student})
+            except Exception as e:
+                errors.append({'student_id': sid, 'detail': f'保存学生失败：{str(e)}'})
+                continue
+
+        # 如果有任何错误，则直接返回，不进行文件上传
+        if errors:
+            return Response({'saved': saved, 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 5. 上传已重命名的 Excel 到 Seafile
+        try:
+            seafile = SeafileAPI(login_name, pwd, server_url)
+            seafile.auth()
+            repo = seafile.get_repo(repo_id)
+
+            base = f"{server_url.rstrip('/')}"
+            file_url = f"{base}/file/{repo_id}/result/{filename}"
+            repo.upload_file('/result', file_path)
+        except Exception as e:
+            return Response({'detail': f'Seafile 上传失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            # 上传成功后清理临时文件
+            try:
+                os.remove(file_path)
+                os.rmdir(os.path.dirname(file_path))
+            except:
+                pass
+
+        return Response({'saved': saved, 'file_url': file_url}, status=status.HTTP_200_OK)
 
 
 class AddStuidView(APIView):
@@ -695,7 +1019,8 @@ class UserModificationView(APIView):
         user_info = UserInfo.objects.get(userId=user.id)
         redis_conn = get_redis_connection("default")
         user_serializer = UserSerializer
-        seafile_file_uploaded = False
+        user_info = UserInfo.objects.get(userId=request.user.id)
+        repo_id = user_info.pri_repo_id
 
         try:
             if user_info.avatar == request.data['avatar'] \
@@ -712,7 +1037,6 @@ class UserModificationView(APIView):
                     "message": "没有任何修改请检查!"
                 })
             if 'avatar' in request.FILES:
-                seafile_api = SeafileAPI(login_name, pwd, server_url)
                 avatar_file = request.FILES['avatar']
                 try:
                     validate_image_content(avatar_file)  # 自定义验证函数
@@ -783,10 +1107,9 @@ class TempAvatarUploadView(APIView):
         ext = request.FILES.get('avatar').name.split('.')[-1]
         filename = f"{user.id}_tmp_ava_upload.{ext}"
         seafile_path = f"/ava/{user.id}_tmp_ava_upload.{ext}"  # Seafile中的存储路径
+        user_info = UserInfo.objects.get(userId=request.user.id)
+        repo_id = user_info.pri_repo_id
         try:
-            seafile_api = SeafileAPI(login_name, pwd, server_url)
-            seafile_api.auth()  # 认证
-
             # 获取仓库对象
             repo = seafile_api.get_repo(repo_id)
 
@@ -922,6 +1245,8 @@ class FileUploadView(APIView):
 
     def post(self, request):
         user = request.user
+        user_info = UserInfo.objects.get(userId=request.user.id)
+        repo_id = user_info.pri_repo_id
         user_file = request.FILES.get('file')
         ext = request.FILES.get('file').name.split('.')[-1]
         filename = f"{user.id}_file_upload.{ext}"
@@ -1328,6 +1653,9 @@ class AnswerConfirmView(APIView):
 
 class SaveExeclView(APIView):
     def post(self, request):
+        user = request.user
+        user_info = UserInfo.objects.get(userId=request.user.id)
+        repo_id = user_info.pri_repo_id
         execlname = request.data.get('execlname')
         groupId = request.data.get('groupId')
         seafile_path = f"/result/{execlname}.xlsx"
@@ -1380,10 +1708,7 @@ class SaveExeclView(APIView):
 
         try:
             # 2) 上传表格到 Seafile
-            seafile_api = SeafileAPI(login_name, pwd, server_url)
-            seafile_api.auth()
             repo = seafile_api.get_repo(repo_id)
-
             # 上传表格文件
             repo.upload_file('/result', table_path)
 

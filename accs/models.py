@@ -144,15 +144,33 @@ class DepartmentMajor(models.Model):
         return f"{self.department} - {self.major}"
 
 
-class Student(models.Model):
-    student_id = models.CharField("学号", max_length=50, unique=True, db_index=True)
-    name = models.CharField("姓名", max_length=50)
-    class_name = models.CharField("班级", max_length=50)
+class Class(models.Model):
+    class_name = models.CharField(max_length=100, verbose_name="班级名称")  # , unique=True
     department_major = models.ForeignKey(
         DepartmentMajor,
-        on_delete=models.PROTECT,
-        verbose_name="院系-专业",
-        related_name="students"
+        on_delete=models.CASCADE,
+        verbose_name="所属院系专业"
+    )
+    created_at = models.DateTimeField("创建时间", auto_now_add=True)
+    updated_at = models.DateTimeField("更新时间", auto_now=True)
+
+    class Meta:
+        db_table = 'class'
+        verbose_name = '班级'
+        unique_together = ('class_name', 'department_major')  # 确保班级与院系专业的唯一性
+
+    def __str__(self):
+        return f"{self.class_name} ({self.department_major.department} - {self.department_major.major})"
+
+
+class Student(models.Model):
+    student_id = models.CharField("学号", max_length=50, db_index=True)
+    name = models.CharField("姓名", max_length=50)
+    class_info = models.ForeignKey(
+        Class,  # 这里通过外键关联到 Class 表
+        on_delete=models.PROTECT,  # 禁止删除班级
+        verbose_name="班级",
+        related_name="students"  # 可以通过 related_name 来反向查询学生
     )
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
     updated_at = models.DateTimeField("更新时间", auto_now=True)
@@ -162,6 +180,8 @@ class Student(models.Model):
         verbose_name = '学生'
         verbose_name_plural = '学生'
         ordering = ['student_id']
+        unique_together = ('student_id', 'class_info')  # 确保同一学号在同一班级下唯一
 
     def __str__(self):
         return f"{self.student_id} - {self.name}"
+
