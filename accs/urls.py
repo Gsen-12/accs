@@ -1,22 +1,19 @@
+from django.conf import settings
+from django.conf.urls.static import static
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg import openapi
 # from drf_yasg.views import get_schema_view
-from accs.views import RegisterView, LoginView, LogoutView, CurrentUserView, AdminRoleView, AdminRoleModificationView, \
-    UserModificationView, PasswordChangeView, TempAvatarUploadView, CreateGroupView, InvitationCodeview, \
-    AssignGroupView, JoinGroupView, JoinConfirmView, AnalyzeCodeView, AnalysisHistoryView, TeaAnswerView, SaveExeclView, \
-    AddStuidView, GenerateClassExcelView, ParseFilledExcelView, DepartmentMajorView
-from django.conf import settings
-from django.conf.urls.static import static
-from accs.views import FileUploadView
-from .views import (
-    AnalyzeCodeView,
-    AnalysisHistoryView,
-    AddAnswerView
-
-)
 from . import views
+from .views import business_views
+from .views.business_views import FileUploadView, AnalyzeCodeView, AnalysisHistoryView, AddAnswerView, TeaAnswerView, \
+    SaveExeclView
+from .views.user_views import RegisterView, LoginView, LogoutView, CurrentUserView, UserModificationView, \
+    PasswordChangeView, AdminRoleView, AdminRoleModificationView, TempAvatarUploadView, CreateGroupView, \
+    InvitationCodeview, AssignGroupView, JoinGroupView, JoinConfirmView, AddStuidView, GenerateClassExcelView, \
+    DepartmentMajorView, ParseFilledExcelView
+
 # from accs.views import AdminUserListView
 
 router = DefaultRouter()
@@ -41,13 +38,9 @@ urlpatterns = [
     path('admin/roles/', AdminRoleView.as_view(), name='admin-roles'),
     path('admin/roles/modification/', AdminRoleModificationView.as_view(), name='admin-roles-modification'),
     path('admin/roles/<int:role_id>/', AdminRoleView.as_view(), name='admin-role-detail'),
-    # path('user/', UserDetailView.as_view(), name='user-detail'),
-    # path('users/', AdminUserListView.as_view(), name='admin-users'),
-    # path('swagger/', schema_view.with_ui('swagger', cache_timeout=0)),
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
     path('upload-code/', FileUploadView.as_view(), name='file-upload'),
-    # path('call/dify/',DifyView.as_view(),name='call-dify'),
     path('group/create/', CreateGroupView.as_view(),name='create-group'),
     path('group/invite_code/', InvitationCodeview.as_view(),name='invite-code'),
     path('assign/', AssignGroupView.as_view(),name='assign-group'),
@@ -55,13 +48,13 @@ urlpatterns = [
     path('confirm/join/', JoinConfirmView.as_view(),name='confirm-join'),
     path('analyze/', AnalyzeCodeView.as_view(), name='analyze-code'),
     path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
-    path('current-dify-ip/', views.current_dify_ip, name='current-dify-ip'),
-    path('set-dify-ip/', views.set_dify_ip, name='set-dify-ip'),
-    path('upload-code/', views.upload_code, name='upload-code'),
+    path('current-dify-ip/', business_views.current_dify_ip, name='current-dify-ip'),
+    path('set-dify-ip/', business_views.set_dify_ip, name='set-dify-ip'),
+    path('upload-code/', business_views.upload_code, name='upload-code'),
     path('answer/', AddAnswerView.as_view(), name='answer'),
     path('tea/answer/', TeaAnswerView.as_view(), name='tea-answer'),
     path('save/execl/', SaveExeclView.as_view(), name='save-execl'),
-    path('save/analyze/', views.set_save_analyze, name='save-analyze'),
+    path('save/analyze/', business_views.set_save_analyze, name='save-analyze'),
     path('add/stuid/', AddStuidView.as_view(), name='add-stuid'),
     path('generate/excel/', GenerateClassExcelView.as_view(), name='generate-excel'),
     path('admin/department/major/', DepartmentMajorView.as_view(), name='admin-department-major'),

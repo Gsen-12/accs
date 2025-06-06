@@ -1,7 +1,6 @@
 from django.contrib import admin
 # from django.contrib.auth.admin import UserAdmin
 from .models import Roles
-from .views import User
 from django.contrib.admin import site
 from django.contrib.admin.models import LogEntry
 
