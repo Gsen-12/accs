@@ -298,4 +298,5 @@ GitHub.sublime-settings
 *migrations
 accs/files
 accs/test.py
-tmp
+tmp/
+.config.json

@@ -9,6 +9,7 @@ https://docs.djangoproject.com/en/5.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
+import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -280,14 +281,9 @@ ALLOWED_FILE_TYPES = ['pdf', 'docx', 'xlsx', "py"]  # 允许的文件类型
 
 DIFY_UPLOAD_URL = "https://192.168.101.69/v1/chat-messages"
 
-
-SEAFILE_CONFIG = {
-    'API_BASE': 'https://seafile.accs.rabbitmind.net',
-    'AVATAR_REPO_ID': 'ad406967-dd0d-4d5c-949c-cdd62d21b9fe',
-    'UPLOAD_DIR': '/用户头像'  # 新增标准化存储目录
-}
+config = json.loads(open(Path.joinpath(BASE_DIR, '.config.json'), 'r', encoding='utf-8').read())
 
 # 新增Seafile配置
-server_url = "https://seafile.accs.rabbitmind.net/"
-login_name = "accs@admin.com"
-pwd = "accs@Aa"
+server_url = config["server_url"]
+login_name = config["login_name"]
+pwd = config["pwd"]
