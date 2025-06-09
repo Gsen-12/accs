@@ -15,7 +15,6 @@ from pathlib import Path
 
 from seafileapi import SeafileAPI
 
-
 DEBUG = True
 
 ALLOWED_HOSTS = ['*']
@@ -28,12 +27,10 @@ CORS_ALLOWED_ORIGINS = ['http://192.168.101.57:5666',
                         'http://192.168.101.69:3000',
                         'http://192.168.101.32']
 
-
-
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
-        "NAME": "ACCS",
+        "NAME": "accs",
         "USER": "root",
         "PASSWORD": "123456",
         "HOST": "127.0.0.1",
@@ -42,5 +39,3 @@ DATABASES = {
     },
 
 }
-
-

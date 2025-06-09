@@ -1,23 +1,23 @@
 import json
 import os
+import re
 import tempfile
+
 import pandas as pd
 from django.contrib.auth import get_user_model
 from django_redis import get_redis_connection
 from rest_framework import status
+from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from seafileapi import SeafileAPI
-import re
-from rest_framework.decorators import api_view
 from CorrectionPlatformBackend.base import login_name, pwd, server_url
-from accs.models import AnalysisResult, IPConfig
-from accs.serializers import AnalysisSerializer
-from rest_framework.permissions import AllowAny
-from accs.services import DifyService, get_reliable_local_ip, DifyAnswer
-from accs.models import Roles, UserInfo, Group, GroupAssignment
+from accs.models import UserInfo, IPConfig, AnalysisResult
 from rest_framework.parsers import MultiPartParser, FormParser
+
+from accs.serializers import AnalysisSerializer
+from accs.services import get_reliable_local_ip, DifyAnswer, DifyService
 
 User = get_user_model()
 
@@ -81,8 +81,8 @@ class AnalyzeCodeView(APIView):
     def post(self, request):
         user = request.user
         user_id = user.id
-        group_id = GroupAssignment.objects.get(userId=user_id).groupId
-        print('group_id:', group_id)
+
+        # print('group_id:', group_id)
 
         if not group_id:
             return Response({

@@ -6,12 +6,11 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg import openapi
 # from drf_yasg.views import get_schema_view
 from . import views
-from .views import business_views
-from .views.business_views import FileUploadView, AnalyzeCodeView, AnalysisHistoryView, AddAnswerView, TeaAnswerView, \
+from .views import business_function
+from .views.business_function import FileUploadView, TeaAnswerView, \
     SaveExeclView
-from .views.user_views import RegisterView, LoginView, LogoutView, CurrentUserView, UserModificationView, \
-    PasswordChangeView, AdminRoleView, AdminRoleModificationView, TempAvatarUploadView, CreateGroupView, \
-    InvitationCodeview, AssignGroupView, JoinGroupView, JoinConfirmView, AddStuidView, GenerateClassExcelView, \
+from .views.custom_system import RegisterView, LoginView, LogoutView, CurrentUserView, UserModificationView, \
+    PasswordChangeView, AdminRoleView, AdminRoleModificationView, TempAvatarUploadView, GenerateClassExcelView, \
     DepartmentMajorView, ParseFilledExcelView
 
 # from accs.views import AdminUserListView
@@ -41,21 +40,16 @@ urlpatterns = [
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
     path('upload-code/', FileUploadView.as_view(), name='file-upload'),
-    path('group/create/', CreateGroupView.as_view(),name='create-group'),
-    path('group/invite_code/', InvitationCodeview.as_view(),name='invite-code'),
-    path('assign/', AssignGroupView.as_view(),name='assign-group'),
-    path('group/join/', JoinGroupView.as_view(),name='join-group'),
-    path('confirm/join/', JoinConfirmView.as_view(),name='confirm-join'),
-    path('analyze/', AnalyzeCodeView.as_view(), name='analyze-code'),
-    path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
-    path('current-dify-ip/', business_views.current_dify_ip, name='current-dify-ip'),
-    path('set-dify-ip/', business_views.set_dify_ip, name='set-dify-ip'),
-    path('upload-code/', business_views.upload_code, name='upload-code'),
-    path('answer/', AddAnswerView.as_view(), name='answer'),
+    # path('analyze/', AnalyzeCodeView.as_view(), name='analyze-code'),
+    # path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
+    # path('current-dify-ip/', business_views.current_dify_ip, name='current-dify-ip'),
+    # path('set-dify-ip/', business_views.set_dify_ip, name='set-dify-ip'),
+    # path('upload-code/', business_views.upload_code, name='upload-code'),
+    # path('answer/', AddAnswerView.as_view(), name='answer'),
     path('tea/answer/', TeaAnswerView.as_view(), name='tea-answer'),
     path('save/execl/', SaveExeclView.as_view(), name='save-execl'),
-    path('save/analyze/', business_views.set_save_analyze, name='save-analyze'),
-    path('add/stuid/', AddStuidView.as_view(), name='add-stuid'),
+    # path('save/analyze/', business_views.set_save_analyze, name='save-analyze'),
+    # path('add/stuid/', AddStuidView.as_view(), name='add-stuid'),
     path('generate/excel/', GenerateClassExcelView.as_view(), name='generate-excel'),
     path('admin/department/major/', DepartmentMajorView.as_view(), name='admin-department-major'),
     path('parsefille/excel', ParseFilledExcelView.as_view(), name='parsefille-Excel'),

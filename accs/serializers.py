@@ -1,7 +1,7 @@
 from django.core.validators import FileExtensionValidator
 from django.contrib.auth.models import User, Permission
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from accs.models import Roles, UserInfo, Group, GroupAssignment, StuAssignment, DepartmentMajor
+from accs.models import Roles, UserInfo, DepartmentMajor
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from PIL import Image
@@ -149,21 +149,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     #     return access_token
 
 
-class StuUploadSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = StuAssignment
-        fields = [
-            'stuId',
-            'username',
-            'groupname'
-        ]
-        extra_kwargs = {
-            'stuId': {'required': False},
-            'username': {'required': False},
-            'groupname': {'required': False},
-        }
-
-
 class AvatarUploadSerializer(serializers.Serializer):
     avatar = serializers.ImageField(
         allow_empty_file=False,
@@ -187,14 +172,6 @@ class AvatarUploadSerializer(serializers.Serializer):
         return value
 
 
-class AssignGroupSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = GroupAssignment
-        fields = [
-            'userId',
-            'groupId',
-        ]
-
 
 class DepartmentMajorSerializer(serializers.ModelSerializer):
     created_at = serializers.DateTimeField(
@@ -206,35 +183,6 @@ class DepartmentMajorSerializer(serializers.ModelSerializer):
         model = DepartmentMajor
         fields = ['id', 'department', 'major', 'created_at']
         read_only_fields = ['id', 'created_at']
-
-
-class GroupSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Group
-        fields = [
-            'school',
-            'college',
-            'specialty',
-            'study_groups',
-        ]
-        extra_kwargs = {
-            'GroupId': {'required': False}
-        }
-
-    def get_id(self):
-        return self.context.get("GroupId")
-
-    def create(self, validated_data):
-        group = Group.objects.create(
-            GroupId=self.context['GroupId'],
-            study_groups=validated_data['study_groups'],
-        )
-        return group
-
-    def validate_study_groups(self, value):
-        if Group.objects.filter(study_groups=value).exists():
-            raise serializers.ValidationError("该班级名称已存在")
-        return value
 
 
 class AnalysisSerializer(serializers.ModelSerializer):

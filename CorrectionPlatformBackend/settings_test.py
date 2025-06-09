@@ -3,11 +3,11 @@ from pathlib import Path
 # import sys
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
+ALLOWED_HOSTS = ['*']
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
-        "NAME": "ACCS",
+        "NAME": "accs",
         "USER": "root",
         "PASSWORD": "123456",
         "HOST": "127.0.0.1",

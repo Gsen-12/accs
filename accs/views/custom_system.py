@@ -2,14 +2,13 @@ import datetime
 import json
 import os
 import tempfile
-import uuid
 from sqlite3 import IntegrityError
 
 import pandas as pd
 from django.contrib.auth import authenticate, get_user_model
 from django.db import transaction
 from django.db.models import Q
-from django.http import JsonResponse, FileResponse
+from django.http import JsonResponse
 from django_redis import get_redis_connection
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -21,16 +20,14 @@ from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 from seafileapi import SeafileAPI
 from django.core.files.storage import default_storage
-from sqlalchemy import create_engine
-from CorrectionPlatformBackend import settings
 from CorrectionPlatformBackend.base import login_name, pwd, server_url
-from accs.models import StuAssignment, DepartmentMajor, Student, Class
+from accs.models import DepartmentMajor, Student, Class
 from accs.serializers import DepartmentMajorSerializer
 from rest_framework.permissions import AllowAny
-from accs.models import Roles, UserInfo, Group, GroupAssignment
-from accs.permissions import IsSuperAdmin, IsTeacher
+from accs.models import Roles, UserInfo
+from accs.permissions import IsSuperAdmin
 from accs.serializers import UserSerializer, UserInfoSerializer, RolesSerializer, \
-    validate_image_content, GroupSerializer
+    validate_image_content
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accs.utils.middleware import UUIDTools
 
@@ -328,38 +325,6 @@ class GenerateClassExcelView(APIView):
             'file_url': file_url
         }, status=status.HTTP_201_CREATED)
 
-    # def get(self, request):
-    #     data = request.data
-    #     user = request.user
-    #     save_path = request.data.get('save_path')
-    #     target_path = request.data.get('target_path')
-    #     user_info = UserInfo.objects.get(userId=request.user.id)
-    #     repo_id = user_info.pri_repo_id
-    #     repo_name = user.username
-    #     if os.path.exists(save_path) is False:
-    #         return Response(
-    #             {'detail': '保存路径不存在'},
-    #             status=status.HTTP_400_BAD_REQUEST
-    #         )
-    #     api_url = f'https://seafile.accs.rabbitmind.net/library/{repo_id}/{repo_name}/result/{target_path}'
-    #     response = requests.get(api_url)
-    #     if response.status_code == 404:
-    #         return Response(
-    #             {'detail': f'没找到这个文件，是否创建了表格？'},
-    #             status=status.HTTP_404_NOT_FOUND
-    #         )
-    #     temp_dir = tempfile.mkdtemp()
-    #     repo = seafile_api.get_repo(repo_id)
-    #     base = f"{server_url.rstrip('/')}"
-    #     local_save_path = f'{save_path}/downloaded_file.jpg'
-    #     try:
-    #         repo.download_file(target_path, local_save_path)
-    #     except Exception as e:
-    #         return Response(
-    #             {'detail': f'Seafile 下载失败：{str(e)}'},
-    #             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-    #         )
-    #     return Response({'detail': '下载完成'}, status=status.HTTP_201_CREATED)
 
 
 class DepartmentMajorView(APIView):
@@ -1240,184 +1205,6 @@ class SaveStudentsView(APIView):
                     'deleted': results
                 },
                 status=status.HTTP_200_OK)
-
-
-class CreateGroupView(APIView):
-    permission_classes = [IsSuperAdmin]
-
-    @staticmethod
-    def post(request):
-        if not {'study_groups'}.issubset(request.data):
-            return Response({"message": "缺少必填字段"}, status=400)
-        uuid = UUIDTools().uuid4_hex()
-        group_serializer = GroupSerializer(
-            data=request.data,
-            context={'request': request, 'GroupId': uuid}
-        )
-        if group_serializer.is_valid():
-            group_serializer.save()
-            return Response({
-                "code": 201,
-                "data": {
-                    "GroupId": group_serializer.get_id(),
-                    "study_groups": request.data['study_groups']
-                },
-                "message": "班级创建成功"
-            }, status=status.HTTP_201_CREATED)
-        return Response(group_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class AssignGroupView(APIView):
-    permission_classes = [IsAuthenticated, IsTeacher]
-
-    @staticmethod
-    def post(request):
-        user_id = request.data.get('user_id')
-        group_id = request.data.get('group_id')
-        if not {'user_id', 'group_id'}.issubset(request.data):
-            return Response({"message": "缺少必填字段"}, status=400)
-
-        try:
-            user_info = UserInfo.objects.get(userId=user_id)
-            print(user_info)
-
-            print(user_info.role_id)
-            if user_info.role_id == 2:
-                return Response({"code": 403, "message": "用户为老师"}, status=403)
-            if user_info.role_id == 3:
-                return Response({"code": 403, "message": "用户为管理员"}, status=403)
-        except User.DoesNotExist:
-            return Response({"code": 403, "message": "用户不存在"}, status=403)
-        except Group.DoesNotExist:
-
-            return Response({"code": 403, "message": "班级不存在"}, status=403)
-        try:
-            assignment, created = GroupAssignment.objects.get_or_create(
-                userId=user_id,
-                groupId=group_id,
-                defaults={'userId': user_id, 'groupId': group_id}
-            )
-            if not created:
-                return Response({"code": 409, "message": "用户已在该班级中"}, status=409)
-
-            return Response({
-                "code": 200,
-                "data": {
-                    "user_id": user_id,
-                    "group_id": group_id
-                },
-                "message": "加入班级成功"
-            }, status=200)
-        except Exception as e:
-            return Response({"code": 500, "error": str(e)}, status=500)
-
-
-class InvitationCodeview(APIView):
-    permission_classes = [IsTeacher, IsAuthenticated]
-
-    @staticmethod
-    def post(request):
-        group_id = request.data.get('group_id')
-        group = Group.objects.get(GroupId=group_id)
-        try:
-            invitation_code = uuid.uuid4().hex[:8]
-            redis_conn = get_redis_connection("invitation")
-            redis_conn.setex(
-                name=group_id,
-                time=3600,  # 1小时回滚有效期
-                value=json.dumps(invitation_code)
-            )
-            return Response({
-                "code": 200,
-                "error": f"获取邀请码成功",
-                'data': {invitation_code}
-            }, status=200)
-        except Exception as e:
-            return Response({
-                "code": 500,
-                "error": f"获取邀请码失败：{str(e)}"
-            }, status=500)
-
-
-class JoinGroupView(APIView):
-    permissions_classes = [IsAuthenticated]
-
-    @staticmethod
-    def post(request):
-        if not {'group_id', 'invitation_code'}.issubset(request.data):
-            return Response({"message": "缺少必填字段"}, status=400)
-        redis_conn = get_redis_connection('invitation')
-        stored_code = redis_conn.get(request.data['group_id'])
-
-        if not stored_code:
-            return Response({
-                'code': 404,
-                'message': '邀请码已过期'
-            }, status=404)
-        if request.data['invitation_code'] != json.loads(stored_code):
-            return Response({
-                "code": 403,
-                "message": "邀请码无效"
-            }, status=403)
-
-        try:
-            # 检查当前用户是否已有班级关联记录
-            # 使用当前登录用户的ID过滤GroupAssignment表记录
-            existing_assignments = GroupAssignment.objects.filter(userId=request.user.id)
-
-            if existing_assignments.exists():
-                return Response({
-                    'code': 409,
-                    'message': '您已加入其他班级或已在本班级中，确认要覆盖吗？',
-                    'existing_groups': [
-                        str(ass.groupId) for ass in existing_assignments  # 遍历查询集提取班级ID
-                    ]
-                }, status=409)
-            assignment, created = GroupAssignment.objects.get_or_create(
-                userId=request.user.id,
-                groupId=request.data['group_id'],
-                defaults={
-                    'userId': request.user.id,
-                    'groupId': request.data['group_id'],
-                }
-            )
-            if not created:
-                return Response({
-                    'code': 406,
-                    'message': '已在本班级中'
-                }, status=406)
-            return Response({
-                'code': 200,
-                'data': {
-                    'group_id': request.data['group_id'],
-                }
-            }, status=200)
-        except Exception as e:
-            return Response({"code": 500, "error": str(e)}, status=500)
-
-
-class JoinConfirmView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        # 需要接收确认参数和班级ID
-        if not {'group_id', 'confirm'}.issubset(request.data):
-            return Response({"code": 400, "message": "缺少必要参数"}, status=400)
-
-        if request.data['confirm'] == 'true':
-            # 删除原有班级关联
-            GroupAssignment.objects.filter(userId=request.user.id).delete()
-
-            # 创建新关联
-            GroupAssignment.objects.create(
-                userId=request.user.id,
-                groupId=request.data['group_id']
-            )
-            return Response({'code': 200, 'message': '班级覆盖成功'})
-
-        if request.data['confirm'] == 'false':
-            return Response({'code': 406, 'message': '取消覆盖操作'}, status=406)
-
 
 class CurrentUserView(RetrieveAPIView):
     serializer_class = UserSerializer

@@ -1,10 +1,5 @@
-from django.contrib.auth.models import AbstractUser, User
 from django.db import models
 from rest_framework_simplejwt.tokens import RefreshToken
-from CorrectionPlatformBackend import settings
-
-
-# Create your models here.
 
 class Roles(models.Model):
     ADMIN_ROLE_ID = 3
@@ -42,45 +37,6 @@ class BlacklistedToken(models.Model):
         cls.objects.create(token=str(refresh))
 
 
-class UserFile(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    file = models.FileField(upload_to='uploads/%Y/%m/%d/')
-    # 新增字段
-    is_temporary = models.BooleanField(default=True)
-    original_name = models.CharField(max_length=255)
-    uploaded_at = models.DateTimeField(auto_now_add=True)
-    seafile_file_id = models.CharField(max_length=100, unique=True)  # 新增Seafile文件ID
-    file_hash = models.CharField(max_length=64)  # SHA256哈希值
-
-    def get_seafile_url(self):
-        """生成文件访问链接"""
-        return f"{settings.SEAFILE_API_URL}/files/{self.seafile_file_id}/download"
-
-    def get_final_path(self):
-        return f"{settings.FINAL_FILE_DIR}/{self.original_name}"
-
-
-class Group(models.Model):
-    GroupId = models.IntegerField(primary_key=True)
-    school = models.CharField(max_length=255, null=True)
-    specialty = models.CharField(max_length=255, null=True)
-    college = models.CharField(max_length=255, null=True)
-    study_groups = models.CharField(max_length=100, verbose_name="班级名称")
-
-
-class GroupAssignment(models.Model):
-    userId = models.CharField(max_length=255)
-    study_groups = models.CharField(max_length=255)
-    specialty = models.CharField(max_length=255, null=True)
-    college = models.CharField(max_length=255, null=True)
-
-
-class StuAssignment(models.Model):
-    stuId = models.CharField(max_length=100, null=True)
-    username = models.CharField(max_length=255)
-    groupname = models.CharField(max_length=255)
-
-
 class UserInfo(models.Model):
     # userId = models.OneToOneField(
     #     User,
@@ -96,8 +52,8 @@ class UserInfo(models.Model):
     role_id = models.IntegerField(null=False)
     GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
     gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
-    pub_repo_id = models.CharField(max_length=255,null=True,default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
-    pri_repo_id = models.CharField(max_length=255,null=True)
+    pub_repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
+    pri_repo_id = models.CharField(max_length=255, null=True)
 
 
 class AnalysisResult(models.Model):
@@ -184,4 +140,3 @@ class Student(models.Model):
 
     def __str__(self):
         return f"{self.student_id} - {self.name}"
-

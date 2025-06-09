@@ -1,10 +1,6 @@
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken
 from .models import BlacklistedToken
-from rest_framework_simplejwt.tokens import BlacklistMixin, RefreshToken
-from django.core.cache import cache
-from rest_framework_simplejwt.settings import api_settings
-from rest_framework_simplejwt.exceptions import TokenError
 
 
 class CustomJWTAuthentication(JWTAuthentication):
@@ -18,7 +14,6 @@ class CustomJWTAuthentication(JWTAuthentication):
                 raise InvalidToken("Token 已失效")
             return user, token
         return None
-
 
 # class RedisBlacklistMixin(BlacklistMixin):
 #     def verify(self, *args, **kwargs):

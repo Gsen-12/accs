@@ -11,10 +11,8 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
-
-from seafileapi import SeafileAPI
 
 # import sys
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -200,7 +198,7 @@ CACHES = {
         }
 }
 AUTHENTICATION_BACKENDS = (
-    'accs.views.MyCustomBackend',
+    'accs.views.custom_system.MyCustomBackend',
     'django.contrib.auth.backends.ModelBackend',
 )
 # Password validation

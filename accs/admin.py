@@ -1,8 +1,8 @@
 from django.contrib import admin
-# from django.contrib.auth.admin import UserAdmin
 from .models import Roles
 from django.contrib.admin import site
 from django.contrib.admin.models import LogEntry
+
 
 class RoleAdmin(admin.ModelAdmin):
     filter_horizontal = ('permissions',)  # 权限多选界面优化
@@ -39,5 +39,6 @@ admin.site.register(Roles, RoleAdmin)
 
 class LogEntryAdmin(admin.ModelAdmin):
     list_display = ['action_time', 'user', 'content_type', 'object_repr', 'change_message']
+
 
 site.register(LogEntry, LogEntryAdmin)  # 在管理后台查看日志
