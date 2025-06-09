@@ -7,8 +7,13 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 # from drf_yasg.views import get_schema_view
 from . import views
 from .views import business_function
-from .views.business_function import FileUploadView, TeaAnswerView, \
-    SaveExeclView
+from .views.business_function import (
+    FileUploadView,
+    TeaAnswerView,
+    SaveExeclView,
+    AnalyzeCodeView,
+    AnalysisHistoryView,
+)
 from .views.custom_system import RegisterView, LoginView, LogoutView, CurrentUserView, UserModificationView, \
     PasswordChangeView, AdminRoleView, AdminRoleModificationView, TempAvatarUploadView, GenerateClassExcelView, \
     DepartmentMajorView, ParseFilledExcelView
@@ -40,15 +45,15 @@ urlpatterns = [
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
     path('upload-code/', FileUploadView.as_view(), name='file-upload'),
-    # path('analyze/', AnalyzeCodeView.as_view(), name='analyze-code'),
-    # path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
-    # path('current-dify-ip/', business_views.current_dify_ip, name='current-dify-ip'),
-    # path('set-dify-ip/', business_views.set_dify_ip, name='set-dify-ip'),
-    # path('upload-code/', business_views.upload_code, name='upload-code'),
+    path('analyze/', AnalyzeCodeView.as_view(), name='analyze-code'),
+    path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
+    path('current-dify-ip/', business_function.current_dify_ip, name='current-dify-ip'),
+    path('set-dify-ip/', business_function.set_dify_ip, name='set-dify-ip'),
+    path('upload-code/', business_function.upload_code, name='upload-code'),
     # path('answer/', AddAnswerView.as_view(), name='answer'),
     path('tea/answer/', TeaAnswerView.as_view(), name='tea-answer'),
     path('save/execl/', SaveExeclView.as_view(), name='save-execl'),
-    # path('save/analyze/', business_views.set_save_analyze, name='save-analyze'),
+    path('save/analyze/', business_function.set_save_analyze, name='save-analyze'),
     # path('add/stuid/', AddStuidView.as_view(), name='add-stuid'),
     path('generate/excel/', GenerateClassExcelView.as_view(), name='generate-excel'),
     path('admin/department/major/', DepartmentMajorView.as_view(), name='admin-department-major'),
