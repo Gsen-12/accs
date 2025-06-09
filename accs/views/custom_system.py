@@ -326,7 +326,6 @@ class GenerateClassExcelView(APIView):
         }, status=status.HTTP_201_CREATED)
 
 
-
 class DepartmentMajorView(APIView):
     """
     接收前端 POST 上传的 JSON：{'department': '信息工程学院', 'major': '计算机科学与技术'}
@@ -1205,6 +1204,7 @@ class SaveStudentsView(APIView):
                     'deleted': results
                 },
                 status=status.HTTP_200_OK)
+
 
 class CurrentUserView(RetrieveAPIView):
     serializer_class = UserSerializer
