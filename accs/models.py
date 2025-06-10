@@ -1,6 +1,7 @@
 from django.db import models
 from rest_framework_simplejwt.tokens import RefreshToken
 
+
 class Roles(models.Model):
     ADMIN_ROLE_ID = 3
     role_id = models.AutoField(primary_key=True)  # 改为自增字段
@@ -54,6 +55,8 @@ class UserInfo(models.Model):
     gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
     pub_repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
     pri_repo_id = models.CharField(max_length=255, null=True)
+    AUDIT_CHOICES = ((0, '待审核'), (1, '已通过'), (2, '已拒绝'))
+    audit = models.SmallIntegerField(choices=AUDIT_CHOICES, null=True)
 
 
 class AnalysisResult(models.Model):

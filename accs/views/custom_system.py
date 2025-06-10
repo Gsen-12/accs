@@ -1,5 +1,6 @@
 import datetime
 import json
+import base64
 import os
 import tempfile
 from sqlite3 import IntegrityError
@@ -20,7 +21,9 @@ from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 from seafileapi import SeafileAPI
 from django.core.files.storage import default_storage
-from CorrectionPlatformBackend.base import login_name, pwd, server_url
+
+from CorrectionPlatformBackend import base
+from CorrectionPlatformBackend.base import login_name, pwd, server_url, admin_repo_id
 from accs.models import DepartmentMajor, Student, Class
 from accs.serializers import DepartmentMajorSerializer
 from rest_framework.permissions import AllowAny
@@ -47,57 +50,175 @@ class RegisterView(APIView):
     @staticmethod
     def post(request):
         username = request.data.get('username')
+        password = request.data.get('password')
+        email = request.data.get('email', '')
+        role_id = request.data.get('role_id')
+        real_name = request.data.get('real_name')
+        gender = request.data.get('gender')
+        avatar_file = request.FILES.get('avatar')
+
         if not {'username', 'password', 'role_id', 'gender'}.issubset(request.data):
-            return Response({"message": "缺少必填字段"}, status=400)
+            return Response(
+                {
+                    'status': 'error',
+                    'message': '用户名、密码和角色必须提供'
+                },
+                status=400
+            )
+
+        if gender not in ["0", "1", "2"]:
+            return Response(
+                {'status': 'error', 'message': '无效的性别'}, status=400)
+
+        if role_id not in ["1", "2"]:
+            return Response(
+                {'status': 'error', 'message': '无效的角色 ID'}, status=400)
+
+        if role_id == "2":
+            # 角色2需要真实姓名和头像
+            if not real_name or not avatar_file:
+                return Response(
+                    {'status': 'error', 'message': '请提供真实姓名和头像图片'}, status=400)
+
         if len(request.data['password']) < 8:
             return Response({"password": "密码长度需至少8位"}, status=400)
+
+        # 设置审核字段
+        audit_value = 1 if role_id == 1 else 0
+
+        # 如果是角色2，上传头像图片到 /ava/ 目录:contentReference[oaicite:6]{index=6}
+        avatar_path = ''
+        if role_id == "2" and avatar_file:
+
+            repo_id = base.admin_repo_id
+            ext = request.FILES.get('avatar').name.split('.')[-1]
+            filename = f"{real_name}_审核.{ext}"
+            seafile_path = f"/verify/{filename}"  # Seafile中的存储路径
+            print(seafile_path)
+
+            # 获取上传链接
+            repo = seafile_api.get_repo(repo_id)
+            print(repo)
+
+            dir = tempfile.mkdtemp()
+            file_path = os.path.join(dir, filename)
+
+            with open(file_path, 'wb') as temp_file:
+                for chunk in avatar_file.chunks():
+                    temp_file.write(chunk)
+
+            try:
+                if filename in [x["name"] for x in repo.list_dir("/verify")]:
+                    repo.delete_file(seafile_path)
+                repo.upload_file("/verify", file_path)
+            except Exception as e:
+                return Response({'detail': f'Seafile 上传失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 创建 Django 用户
+        if User.objects.filter(username=username).exists():
+            return Response({'status': 'error', 'message': '用户名已存在'}, status=400)
         uuid = UUIDTools().uuid4_hex()
-        user_serializer = UserSerializer(data=request.data, context={'id': uuid})
-        if user_serializer.is_valid():
-            if request.data.get('role_id') is not None:
-                user_serializer.save()
-                try:
-                    repo = seafile_api.create_repo(username)
-                    repo.create_dir('/file')
-                    repo.create_dir('/ava')
-                    repo.create_dir('/result')
-                    pri_repo_id = repo.repo_id
-                    print(pri_repo_id)
-                    user_info_data = request.data.copy()
-                    user_info_data['pri_repo_id'] = pri_repo_id
+        user_id = uuid
+        user = User.objects.create_user(username=username, password=password, email=email, id=user_id)
 
-                except Exception as e:
-                    return Response({
-                        "error": f"创建私人库失败: {str(e)}"
-                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                userinfo_data = request.data.copy()
-                userinfo_data['pri_repo_id'] = pri_repo_id
+        # 保存用户信息到 UserInfo 模型（假定存在 real_name, role_id, audit, avatar_path 字段）
+        UserInfo.objects.create(
+            userId=user_id,
+            realName=real_name if role_id == "2" else '',
+            role_id=role_id,
+            audit=audit_value,
+            gender=gender,
+        )
 
-                userinfo_serializer = UserInfoSerializer(
-                    data=userinfo_data,
-                    context={'userId': user_serializer.get_id()},
-                    partial=True
-                )
-                if userinfo_serializer.is_valid():
-                    userinfo_serializer.save()
-                    return Response({
-                        "code": 201,
-                        "data": {
-                            "user_id": user_serializer.get_id(),
-                            "role_id": request.data['role_id']
-                        },
-                        "message": "注册成功"
-                    }, status=status.HTTP_201_CREATED)
-                else:
-                    return Response(userinfo_serializer.errors, status=400)
+        return Response({
+            'status': 'success',
+            'user_id': user.id,
+            'message': '注册成功，待审核' if role_id == "2" else '注册成功'
+        })
 
-            else:
-                return Response(
-                    {"code": 400, "message": "角色ID不能为空", "data": None},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
 
-        return Response(user_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+class AuditUsersView(APIView):
+    """
+    管理员审核视图，权限仅限 IsSuperAdmin
+    GET: 返回所有待审核 (audit=0) 的 role_id=2 用户列表，包含真实姓名和头像（Base64 编码）
+    POST: 接收 { user_id, audit }，将对应用户的 audit 更新为 1（通过）或 2（拒绝）
+    """
+    # permission_classes = [IsSuperAdmin]
+    permission_classes = [AllowAny]  # 需删除
+
+    def get(self, request):
+        """
+        管理员查看所有待审核用户的信息和头像（Base64）
+        """
+        pending = UserInfo.objects.filter(role_id=2, audit=0)
+        result = []
+
+        for ui in pending:
+            user_entry = {"user_id": ui.userId, "real_name": ui.realName}
+            try:
+                # 查 Django User
+                user = User.objects.get(id=ui.userId)
+                user_entry["username"] = user.username
+
+                # 获取 Repo 对象
+                repo = seafile_api.get_repo(ui.pri_repo_id)
+
+                # 下载头像到临时文件
+                file_name = f"{ui.realName}.jpg"
+                file_path = f"/ava/{file_name}"
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp_path = tmp.name
+                repo.download_file(file_path, tmp_path)
+
+                # 读取并 Base64 编码
+                with open(tmp_path, "rb") as f:
+                    data = f.read()
+                os.remove(tmp_path)
+
+                b64 = base64.b64encode(data).decode('utf-8')
+                user_entry["avatar_base64"] = f"data:image/jpeg;base64,{b64}"
+
+            except User.DoesNotExist:
+                user_entry["error"] = "对应的 User 不存在"
+            except Exception as e:
+                user_entry["error"] = f"获取头像失败: {e}"
+
+            result.append(user_entry)
+
+        return Response({
+            "code": 200,
+            "data": result,
+            "message": "获取待审核用户成功"
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        audit = request.data.get('audit')
+        if audit not in (1, 2):
+            return Response({
+                'code': 400,
+                'message': 'audit 必须是 1（通过）或 2（拒绝）'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ui = UserInfo.objects.get(userId=user_id, role_id=2)
+        except UserInfo.DoesNotExist:
+            return Response({
+                'code': 404,
+                'message': '找不到待审核的用户'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        ui.audit = audit
+        ui.save()
+
+        return Response({
+            'code': 200,
+            'message': '审核已更新',
+            'data': {
+                'user_id': user_id,
+                'new_audit': audit
+            }
+        }, status=status.HTTP_200_OK)
 
 
 class LoginView(APIView):
@@ -108,13 +229,58 @@ class LoginView(APIView):
         username = request.data.get('username')
         password = request.data.get('password')
         user = authenticate(username=username, password=password)
-        # role = UserInfo.objects.get(user_id=user.id)
+
+        # 用户不存在或密码错误
         if not user:
             return Response({
                 "code": 401,
                 "message": "用户名或密码错误",
                 "result": None
-            }, status=status.HTTP_200_OK)  # Vben通常接受200带错误码
+            }, status=status.HTTP_200_OK)
+
+        # 如果是 role_id = 2，需要检查 audit 状态
+        try:
+            userinfo = UserInfo.objects.get(userId=user.id)
+        except UserInfo.DoesNotExist:
+            # 理论上不应该发生，用户一定有对应的 UserInfo
+            return Response({
+                "code": 500,
+                "message": "用户信息不完整，请联系客服",
+                "result": None
+            }, status=status.HTTP_200_OK)
+
+        if userinfo.role_id == 2:
+            if userinfo.audit == 0:
+                return Response({
+                    "code": 403,
+                    "message": "您的资料正在审核中，请耐心等待",
+                    "result": None
+                }, status=status.HTTP_200_OK)
+            elif userinfo.audit == 2:
+                return Response({
+                    "code": 403,
+                    "message": "您的审核申请已被拒绝，如有疑问请联系系统负责人",
+                    "result": None
+                }, status=status.HTTP_200_OK)
+
+            # —— 新增：检查并创建 Seafile 个人库 —— #
+            try:
+                # 列出当前所有库，检查是否有 name == username 的
+                repo_list = seafile_api.list_repos()
+                has_personal_repo = any(r.get('name') == username for r in repo_list)
+                if not has_personal_repo:
+                    # 创建个人库并初始化目录
+                    repo = seafile_api.create_repo(username)
+                    repo.create_dir('/file')
+                    repo.create_dir('/ava')
+                    repo.create_dir('/result')
+
+                    # 更新 UserInfo.pri_repo_id
+                    userinfo.pri_repo_id = repo.repo_id
+                    userinfo.save()
+            except Exception as e:
+                # 如果 Seafile 操作失败，不影响登录，但可记录日志
+                print(f"[Seafile] 创建个人库失败: {e}")
 
         try:
             # 生成双令牌

@@ -3,7 +3,7 @@ from accs.models import UserInfo
 
 
 class IsSuperAdmin(permissions.BasePermission):
-    """验证超级管理员权限"""
+    """验证管理员权限"""
 
     def has_permission(self, request, view):
         return (
@@ -22,7 +22,7 @@ class IsSuperAdmin(permissions.BasePermission):
 #
 
 class IsTeacher(permissions.BasePermission):
-    """验证超级管理员权限"""
+    """验证老师权限"""
 
     def has_permission(self, request, view):
         if request.user.is_authenticated:

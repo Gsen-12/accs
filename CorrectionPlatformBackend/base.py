@@ -285,3 +285,4 @@ config = json.loads(open(Path.joinpath(BASE_DIR, '.config.json'), 'r', encoding=
 server_url = config["server_url"]
 login_name = config["login_name"]
 pwd = config["pwd"]
+admin_repo_id = config["repo_id"]
