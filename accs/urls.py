@@ -3,9 +3,6 @@ from django.conf.urls.static import static
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
-# from drf_yasg import openapi
-# from drf_yasg.views import get_schema_view
-from . import views
 from .views import business_function
 from .views.business_function import (
     FileUploadView,
@@ -14,21 +11,24 @@ from .views.business_function import (
     AnalyzeCodeView,
     AnalysisHistoryView,
 )
-from .views.custom_system import RegisterView, LoginView, LogoutView, CurrentUserView, UserModificationView, \
-    PasswordChangeView, AdminRoleView, AdminRoleModificationView, TempAvatarUploadView, GenerateClassExcelView, \
-    DepartmentMajorView, ParseFilledExcelView
-
-# from accs.views import AdminUserListView
+from .views.custom_system import(
+    RegisterView,
+    LoginView,
+    LogoutView,
+    CurrentUserView,
+    UserModificationView,
+    PasswordChangeView,
+    AdminRoleView,
+    AdminRoleModificationView,
+    TempAvatarUploadView,
+    GenerateClassExcelView,
+    DepartmentMajorView,
+    ParseFilledExcelView,
+    AuditUsersView,
+)
 
 router = DefaultRouter()
-# router.register(r'XXXX', XXXXX)
-# schema_view = get_schema_view(
-#     openapi.Info(
-#         title="API文档",
-#         default_version='v1',
-#     ),
-#     public=True,
-# )
+
 urlpatterns = [
     path('', include(router.urls)),
     path('register/', RegisterView.as_view(), name='register'),
@@ -58,5 +58,6 @@ urlpatterns = [
     path('generate/excel/', GenerateClassExcelView.as_view(), name='generate-excel'),
     path('admin/department/major/', DepartmentMajorView.as_view(), name='admin-department-major'),
     path('parsefille/excel', ParseFilledExcelView.as_view(), name='parsefille-Excel'),
+    path('auditusers/', AuditUsersView.as_view(), name='AuditUsers'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

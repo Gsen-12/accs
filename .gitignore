@@ -295,7 +295,7 @@ Control.system-ca-bundle
  
 GitHub.sublime-settings
 
-*migrations
+*/migrations/[0-9]*
 accs/files
 accs/test.py
 tmp/
