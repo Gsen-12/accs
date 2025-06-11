@@ -72,16 +72,29 @@ class RegisterView(APIView):
 
         if role_id not in ["1", "2"]:
             return Response(
-                {'status': 'error', 'message': '无效的角色 ID'}, status=400)
+                {
+                    'status': 'error',
+                    'message': '无效的角色 ID'
+                }, status=400)
 
         if role_id == "2":
             # 角色2需要真实姓名和头像
             if not real_name or not avatar_file:
-                return Response(
-                    {'status': 'error', 'message': '请提供真实姓名和头像图片'}, status=400)
+                return Response({
+                    'status': 'error',
+                    'message': '请提供真实姓名和头像图片'
+                }, status=400)
+
+        if UserInfo.objects.filter(realName=real_name).exists():
+            return Response({
+                'status': 'error',
+                'message': '该真实姓名已被使用，请换一个'
+            },status=400)
 
         if len(request.data['password']) < 8:
-            return Response({"password": "密码长度需至少8位"}, status=400)
+            return Response({
+                "password": "密码长度需至少8位"
+            }, status=400)
 
         # 设置审核字段
         audit_value = 1 if role_id == 1 else 0
