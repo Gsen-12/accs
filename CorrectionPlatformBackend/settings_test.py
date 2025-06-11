@@ -1,7 +1,6 @@
 from pathlib import Path
 
-# import sys
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 ALLOWED_HOSTS = ['*']
 DATABASES = {
@@ -14,5 +13,4 @@ DATABASES = {
         "PORT": "3306",
         "CHARSET": "utf8mb4",
     },
-
 }

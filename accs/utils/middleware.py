@@ -6,7 +6,8 @@ from django.utils.deprecation import MiddlewareMixin
 class CloseCsrfMiddleware(MiddlewareMixin):
     def process_request(self, request):
         print('csrf')
-        request.csrf_processing_done = True  #csrf处理完毕
+        request.csrf_processing_done = True  # csrf处理完毕
+
 
 class UUIDTools(object):
     @staticmethod

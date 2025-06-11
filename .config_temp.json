@@ -1,5 +1,8 @@
 {
   "server_url": "",
   "login_name": "",
-  "pwd": ""
+  "pwd": "",
+  "repo_id": "",
+  "DIFY_API_KEY": "",
+  "DIFY_API_KEY_Answer": ""
 }

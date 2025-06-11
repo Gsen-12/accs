@@ -296,7 +296,8 @@ Control.system-ca-bundle
 GitHub.sublime-settings
 
 */migrations/[0-9]*
-accs/files
+accs/tmp
 accs/test.py
 tmp/
+CorrectionPlatformBackend/settings.py
 .config.json

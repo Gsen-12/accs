@@ -1,37 +1,37 @@
+import base64
 import datetime
 import json
-import base64
 import os
 import tempfile
 from sqlite3 import IntegrityError
 
 import pandas as pd
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Q
 from django.http import JsonResponse
 from django_redis import get_redis_connection
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
+from rest_framework.generics import RetrieveAPIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework.generics import RetrieveAPIView
-from rest_framework.permissions import IsAuthenticated
 from seafileapi import SeafileAPI
-from django.core.files.storage import default_storage
 
-from CorrectionPlatformBackend import base
-from CorrectionPlatformBackend.base import login_name, pwd, server_url, admin_repo_id
+from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url, admin_repo_id
 from accs.models import DepartmentMajor, Student, Class
-from accs.serializers import DepartmentMajorSerializer
-from rest_framework.permissions import AllowAny
 from accs.models import Roles, UserInfo
 from accs.permissions import IsSuperAdmin
-from accs.serializers import UserSerializer, UserInfoSerializer, RolesSerializer, \
+from accs.serializers import DepartmentMajorSerializer
+from accs.serializers import UserSerializer, RolesSerializer, \
     validate_image_content
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accs.utils.middleware import UUIDTools
 
 User = get_user_model()
@@ -57,97 +57,71 @@ class RegisterView(APIView):
         gender = request.data.get('gender')
         avatar_file = request.FILES.get('avatar')
 
+        # 基础字段校验
         if not {'username', 'password', 'role_id', 'gender'}.issubset(request.data):
-            return Response(
-                {
-                    'status': 'error',
-                    'message': '用户名、密码和角色必须提供'
-                },
-                status=400
-            )
-
+            return Response({'status': 'error', 'message': '用户名、密码和角色必须提供'}, status=400)
         if gender not in ["0", "1", "2"]:
-            return Response(
-                {'status': 'error', 'message': '无效的性别'}, status=400)
-
+            return Response({'status': 'error', 'message': '无效的性别'}, status=400)
         if role_id not in ["1", "2"]:
-            return Response(
-                {
-                    'status': 'error',
-                    'message': '无效的角色 ID'
-                }, status=400)
-
-        if role_id == "2":
-            # 角色2需要真实姓名和头像
-            if not real_name or not avatar_file:
-                return Response({
-                    'status': 'error',
-                    'message': '请提供真实姓名和头像图片'
-                }, status=400)
-
-        if UserInfo.objects.filter(realName=real_name).exists():
-            return Response({
-                'status': 'error',
-                'message': '该真实姓名已被使用，请换一个'
-            },status=400)
-
-        if len(request.data['password']) < 8:
-            return Response({
-                "password": "密码长度需至少8位"
-            }, status=400)
-
-        # 设置审核字段
-        audit_value = 1 if role_id == 1 else 0
-
-        # 如果是角色2，上传头像图片到 /ava/ 目录:contentReference[oaicite:6]{index=6}
-        avatar_path = ''
-        if role_id == "2" and avatar_file:
-
-            repo_id = base.admin_repo_id
-            ext = request.FILES.get('avatar').name.split('.')[-1]
-            filename = f"{real_name}_审核.{ext}"
-            seafile_path = f"/verify/{filename}"  # Seafile中的存储路径
-            print(seafile_path)
-
-            # 获取上传链接
-            repo = seafile_api.get_repo(repo_id)
-            print(repo)
-
-            dir = tempfile.mkdtemp()
-            file_path = os.path.join(dir, filename)
-
-            with open(file_path, 'wb') as temp_file:
-                for chunk in avatar_file.chunks():
-                    temp_file.write(chunk)
-
-            try:
-                if filename in [x["name"] for x in repo.list_dir("/verify")]:
-                    repo.delete_file(seafile_path)
-                repo.upload_file("/verify", file_path)
-            except Exception as e:
-                return Response({'detail': f'Seafile 上传失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # 创建 Django 用户
+            return Response({'status': 'error', 'message': '无效的角色 ID'}, status=400)
+        if len(password) < 8:
+            return Response({'password': '密码长度需至少8位'}, status=400)
         if User.objects.filter(username=username).exists():
             return Response({'status': 'error', 'message': '用户名已存在'}, status=400)
-        uuid = UUIDTools().uuid4_hex()
-        user_id = uuid
-        user = User.objects.create_user(username=username, password=password, email=email, id=user_id)
+        if role_id == "2":
+            if not real_name or not avatar_file:
+                return Response({'status': 'error', 'message': '请提供真实姓名和审核图片'}, status=400)
+            if UserInfo.objects.filter(realName=real_name).exists():
+                return Response({'status': 'error', 'message': '该真实姓名已被使用，请换一个'}, status=400)
 
-        # 保存用户信息到 UserInfo 模型（假定存在 real_name, role_id, audit, avatar_path 字段）
+        # 创建 Django 用户
+        uuid = UUIDTools().uuid4_hex()
+        user = User.objects.create_user(username=username, password=password, email=email, id=uuid)
+
+        # 默认审核状态
+        audit_value = 1 if role_id == "1" else 0
+
+        # 角色2：保存图片到本地 + 存 Redis
+        if role_id == "2":
+            # 本地存储目录（可配置到 settings）
+            local_dir = os.path.join(settings.BASE_DIR, 'tmp', 'verify')
+            os.makedirs(local_dir, exist_ok=True)
+
+            # 构造文件名并保存到本地
+            ext = avatar_file.name.rsplit('.', 1)[-1]
+            filename = f"{user.id}_{real_name}.{ext}"
+            file_path = os.path.join(local_dir, filename)
+            with open(file_path, 'wb') as f:
+                for chunk in avatar_file.chunks():
+                    f.write(chunk)
+
+            # 构造可访问的 URL 或相对路径
+            # 这里假设前端可以通过 /accs/verify/ 访问 tmp/verify 下的文件
+            file_url = f"/accs/verify/{filename}"
+
+            redis_conn = get_redis_connection("verify")
+            # 存 Redis，14 天过期
+            redis_conn.setex(
+                name=f"{user.id}_verify",
+                time=14 * 24 * 3600,
+                value=json.dumps({'real_name': real_name, 'file_url': file_url})
+            )
+
+        # 保存 UserInfo
         UserInfo.objects.create(
-            userId=user_id,
+            userId=user.id,
             realName=real_name if role_id == "2" else '',
-            role_id=role_id,
-            audit=audit_value,
-            gender=gender,
+            role_id=int(role_id),
+            audit=audit_value if role_id == "2" else '1',
+            gender=int(gender),
+            # pri_repo_id 及 pub_repo_id 保留默认
         )
 
         return Response({
             'status': 'success',
             'user_id': user.id,
             'message': '注册成功，待审核' if role_id == "2" else '注册成功'
-        })
+        }, status=status.HTTP_201_CREATED)
 
 
 class AuditUsersView(APIView):
@@ -167,36 +141,49 @@ class AuditUsersView(APIView):
         result = []
 
         for ui in pending:
-            user_entry = {"user_id": ui.userId, "real_name": ui.realName}
+            entry = {"user_id": ui.userId, "real_name": ui.realName}
             try:
-                # 查 Django User
+                # 1. 查 Django User
                 user = User.objects.get(id=ui.userId)
-                user_entry["username"] = user.username
+                entry["username"] = user.username
 
-                # 获取 Repo 对象
-                repo = seafile_api.get_repo(ui.pri_repo_id)
+                # 2. 拿到 Repo 对象
+                repo = seafile_api.get_repo(admin_repo_id)
 
-                # 下载头像到临时文件
-                file_name = f"{ui.realName}.jpg"
-                file_path = f"/ava/{file_name}"
+                # 3. 列出 /ava/ 下文件
+                dirents = repo.list_dir('/verify')
+
+                # 过滤出文件（非目录）
+                files = [d['name'] for d in dirents if not d.get('is_dir')]
+                if not files:
+                    raise ValueError("Seafile verify/ 目录为空")
+                # 取第一个文件（通常只有一张）
+                fname = files[0]
+                print('fname',fname)
+                remote_path = f'/verify/{fname}'
+                print("remote_path", remote_path)
+
+                # 4. 下载到临时文件
                 with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp_path = tmp.name
-                repo.download_file(file_path, tmp_path)
+                    tmp_path = f"{tmp}/downloaded_file.jpg"
+                    print('tmp_path', tmp_path)
 
-                # 读取并 Base64 编码
-                with open(tmp_path, "rb") as f:
+                repo.download_file(remote_path, tmp_path)
+                # 5. Base64 编码
+                with open(tmp_path, 'rb') as f:
                     data = f.read()
                 os.remove(tmp_path)
-
                 b64 = base64.b64encode(data).decode('utf-8')
-                user_entry["avatar_base64"] = f"data:image/jpeg;base64,{b64}"
+                # 按 MIME 推测后缀
+                mime = 'jpeg' if fname.lower().endswith(('jpg', 'jpeg')) else 'png'
+                entry["avatar_base64"] = f"data:image/{mime};base64,{b64}"
 
             except User.DoesNotExist:
-                user_entry["error"] = "对应的 User 不存在"
+                entry["error"] = "对应的 User 不存在"
             except Exception as e:
-                user_entry["error"] = f"获取头像失败: {e}"
+                entry["error"] = f"获取头像失败: {e}"
 
-            result.append(user_entry)
+            result.append(entry)
 
         return Response({
             "code": 200,
