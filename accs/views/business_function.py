@@ -8,14 +8,14 @@ from django.contrib.auth import get_user_model
 from django_redis import get_redis_connection
 from rest_framework import status
 from rest_framework.decorators import api_view
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated, AllowAny
 from seafileapi import SeafileAPI
-from CorrectionPlatformBackend.base import login_name, pwd, server_url
-from accs.models import UserInfo, IPConfig, AnalysisResult
-from rest_framework.parsers import MultiPartParser, FormParser
 
+from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url
+from accs.models import UserInfo, IPConfig, AnalysisResult
 from accs.serializers import AnalysisSerializer
 from accs.services import get_reliable_local_ip, DifyAnswer, DifyService
 

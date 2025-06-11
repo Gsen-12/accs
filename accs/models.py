@@ -39,12 +39,6 @@ class BlacklistedToken(models.Model):
 
 
 class UserInfo(models.Model):
-    # userId = models.OneToOneField(
-    #     User,
-    #     on_delete=models.CASCADE,  # 必须设置级联删除
-    #     pspecialtyrimary_key=True,
-    #     related_name='userinfo'
-    # )
     userId = models.IntegerField(primary_key=True)
     desc = models.TextField(max_length=500, null=True)
     homePath = models.CharField(max_length=100, null=True)
