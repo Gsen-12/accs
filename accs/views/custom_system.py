@@ -134,48 +134,33 @@ class AuditUsersView(APIView):
     permission_classes = [AllowAny]  # 需删除
 
     def get(self, request):
-        """
-        管理员查看所有待审核用户的信息和头像（Base64）
-        """
         pending = UserInfo.objects.filter(role_id=2, audit=0)
+        redis_conn = get_redis_connection("verify")
         result = []
+        local_dir = os.path.join(settings.BASE_DIR, 'tmp', 'verify')
 
         for ui in pending:
             entry = {"user_id": ui.userId, "real_name": ui.realName}
             try:
-                # 1. 查 Django User
                 user = User.objects.get(id=ui.userId)
                 entry["username"] = user.username
 
-                # 2. 拿到 Repo 对象
-                repo = seafile_api.get_repo(admin_repo_id)
+                # 从 Redis 获取文件 URL
+                key = f"{ui.userId}_verify"
+                raw = redis_conn.get(key)
+                if not raw:
+                    raise ValueError("Redis 中未找到审核文件信息")
+                info = json.loads(raw)
+                filename = os.path.basename(info.get('file_url', ''))
+                file_path = os.path.join(local_dir, filename)
+                if not os.path.isfile(file_path):
+                    raise FileNotFoundError(f"本地文件不存在: {file_path}")
 
-                # 3. 列出 /ava/ 下文件
-                dirents = repo.list_dir('/verify')
-
-                # 过滤出文件（非目录）
-                files = [d['name'] for d in dirents if not d.get('is_dir')]
-                if not files:
-                    raise ValueError("Seafile verify/ 目录为空")
-                # 取第一个文件（通常只有一张）
-                fname = files[0]
-                print('fname',fname)
-                remote_path = f'/verify/{fname}'
-                print("remote_path", remote_path)
-
-                # 4. 下载到临时文件
-                with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp_path = f"{tmp}/downloaded_file.jpg"
-                    print('tmp_path', tmp_path)
-
-                repo.download_file(remote_path, tmp_path)
-                # 5. Base64 编码
-                with open(tmp_path, 'rb') as f:
+                # Base64 编码
+                with open(file_path, 'rb') as f:
                     data = f.read()
-                os.remove(tmp_path)
+                mime = 'jpeg' if filename.lower().endswith(('jpg','jpeg')) else 'png'
                 b64 = base64.b64encode(data).decode('utf-8')
-                # 按 MIME 推测后缀
-                mime = 'jpeg' if fname.lower().endswith(('jpg', 'jpeg')) else 'png'
                 entry["avatar_base64"] = f"data:image/{mime};base64,{b64}"
 
             except User.DoesNotExist:
@@ -194,7 +179,7 @@ class AuditUsersView(APIView):
     def post(self, request):
         user_id = request.data.get('user_id')
         audit = request.data.get('audit')
-        if audit not in (1, 2):
+        if audit not in ('1', '2'):
             return Response({
                 'code': 400,
                 'message': 'audit 必须是 1（通过）或 2（拒绝）'
@@ -208,12 +193,32 @@ class AuditUsersView(APIView):
                 'message': '找不到待审核的用户'
             }, status=status.HTTP_404_NOT_FOUND)
 
-        ui.audit = audit
+        # 更新审核状态
+        ui.audit = int(audit)
         ui.save()
+
+        # 删除 Redis 缓存
+        redis_conn = get_redis_connection("verify")
+        redis_conn.delete(f"{user_id}_verify")
+
+        # 删除本地临时图片
+        local_dir = os.path.join(settings.BASE_DIR, 'tmp', 'verify')
+        prefix = f"{user_id}_"
+        try:
+            for fname in os.listdir(local_dir):
+                if fname.startswith(prefix):
+                    file_path = os.path.join(local_dir, fname)
+                    os.remove(file_path)
+        except FileNotFoundError:
+            # 目录不存在则忽略
+            pass
+        except Exception as e:
+            # 日志记录但不影响返回
+            print(f"删除本地审核图片失败: {e}")
 
         return Response({
             'code': 200,
-            'message': '审核已更新',
+            'message': '审核已更新，已清除缓存及本地图片',
             'data': {
                 'user_id': user_id,
                 'new_audit': audit
