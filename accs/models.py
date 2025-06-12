@@ -38,21 +38,6 @@ class BlacklistedToken(models.Model):
         cls.objects.create(token=str(refresh))
 
 
-class UserInfo(models.Model):
-    userId = models.IntegerField(primary_key=True)
-    desc = models.TextField(max_length=500, null=True)
-    homePath = models.CharField(max_length=100, null=True)
-    avatar = models.CharField(max_length=255, null=True, default='avatars/default.png')
-    realName = models.CharField(max_length=100, null=True)
-    role_id = models.IntegerField(null=False)
-    GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
-    gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
-    pub_repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
-    pri_repo_id = models.CharField(max_length=255, null=True)
-    AUDIT_CHOICES = ((0, '待审核'), (1, '已通过'), (2, '已拒绝'))
-    audit = models.SmallIntegerField(choices=AUDIT_CHOICES, null=True)
-
-
 class AnalysisResult(models.Model):
     vulnerabilities = models.IntegerField()  # IntegerField：精确数字
     errors = models.IntegerField()
@@ -137,3 +122,24 @@ class Student(models.Model):
 
     def __str__(self):
         return f"{self.student_id} - {self.name}"
+
+
+class UserInfo(models.Model):
+    userId = models.IntegerField(primary_key=True)
+    student_id = models.ForeignKey(
+        Student,  # 这里通过外键关联到 Class 表
+        on_delete=models.PROTECT,  # 禁止删除学生账号
+        verbose_name="学号表",
+        related_name="students"  # 可以通过 related_name 来反向查询学生
+    )
+    desc = models.TextField(max_length=500, null=True)
+    homePath = models.CharField(max_length=100, null=True)
+    avatar = models.CharField(max_length=255, null=True, default='avatars/default.png')
+    realName = models.CharField(max_length=100, null=True)
+    role_id = models.IntegerField(null=False)
+    GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
+    gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
+    pub_repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
+    pri_repo_id = models.CharField(max_length=255, null=True)
+    AUDIT_CHOICES = ((0, '待审核'), (1, '已通过'), (2, '已拒绝'))
+    audit = models.SmallIntegerField(choices=AUDIT_CHOICES, null=True)
