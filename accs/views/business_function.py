@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from seafileapi import SeafileAPI
 
 from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url
-from accs.models import UserInfo, IPConfig, AnalysisResult
+from accs.models import UserInfo, IPConfig, AnalysisResult, Class, Student
 from accs.serializers import AnalysisSerializer
 from accs.services import get_reliable_local_ip, DifyAnswer, DifyService
 
@@ -82,13 +82,6 @@ class AnalyzeCodeView(APIView):
         user = request.user
         user_id = user.id
 
-        # print('group_id:', group_id)
-
-        if not group_id:
-            return Response({
-                "code": 500,
-                "error": "您没有班级，请去加入班级再来提交"
-            }, status=403)
         try:
             print("学生输入的内容:", request.data)
             raw_input = request.data.get('code', '')
