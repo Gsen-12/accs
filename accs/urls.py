@@ -23,8 +23,9 @@ from .views.custom_system import(
     TempAvatarUploadView,
     GenerateClassExcelView,
     DepartmentMajorView,
-    ParseFilledExcelView,
+    ParseExcelView,
     AuditUsersView,
+    SaveStudentsView,
 )
 
 router = DefaultRouter()
@@ -57,7 +58,8 @@ urlpatterns = [
     # path('add/stuid/', AddStuidView.as_view(), name='add-stuid'),
     path('generate/excel/', GenerateClassExcelView.as_view(), name='generate-excel'),
     path('admin/department/major/', DepartmentMajorView.as_view(), name='admin-department-major'),
-    path('parsefille/excel', ParseFilledExcelView.as_view(), name='parsefille-Excel'),
+    path('parse/excel', ParseExcelView.as_view(), name='parse-Excel'),
     path('auditusers/', AuditUsersView.as_view(), name='AuditUsers'),
+    path('save/stu/', SaveStudentsView.as_view(), name='save-students'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

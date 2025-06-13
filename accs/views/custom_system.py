@@ -56,6 +56,8 @@ class RegisterView(APIView):
         real_name = request.data.get('real_name')
         gender = request.data.get('gender')
         avatar_file = request.FILES.get('avatar')
+        student_id = request.data.get('student_id')
+        class_name = request.data.get('class_name')
 
         # 基础字段校验
         if not {'username', 'password', 'role_id', 'gender'}.issubset(request.data):
@@ -68,6 +70,41 @@ class RegisterView(APIView):
             return Response({'password': '密码长度需至少8位'}, status=400)
         if User.objects.filter(username=username).exists():
             return Response({'status': 'error', 'message': '用户名已存在'}, status=400)
+
+        student_obj = None
+        class_obj = None
+
+        if role_id == "1":
+            # 1. 检查学号
+            if not student_id:
+                return Response(
+                    {'status': 'error', 'message': 'student_id（学号）未填写'},
+                    status=400
+                )
+            # 2. 检查班级
+            if not class_name:
+                return Response({'status': 'error', 'message': 'class_name（班级名）未填写'}, status=400)
+            # 3. 分别查 Student 和 Class
+            try:
+                class_obj = Class.objects.get(class_name=class_name)
+            except Class.DoesNotExist:
+                return Response({'status': 'error', 'message': '班级不存在'}, status=400)
+
+            # 用 student_id + 班级 联合查询
+            try:
+                student_obj = Student.objects.get(
+                    student_id=student_id,
+                    class_info=class_obj
+                )
+            except Student.DoesNotExist:
+                return Response({'status': 'error', 'message': '该班级下学号不存在，请检查后重试'}, status=400)
+            if not student_id or not class_name:
+                return Response({'status': 'error', 'message': 'role_id=1 时必须填写 student_id 和 class_name'},
+                                status=400)
+            # 4. 最后判断该学生是否属于这个班级
+            if student_obj.class_info_id != class_obj.id:
+                return Response({'status': 'error', 'message': '学号和班级不匹配，请确认后再试'}, status=400)
+
         if role_id == "2":
             if not real_name or not avatar_file:
                 return Response({'status': 'error', 'message': '请提供真实姓名和审核图片'}, status=400)
@@ -76,10 +113,40 @@ class RegisterView(APIView):
 
         # 创建 Django 用户
         uuid = UUIDTools().uuid4_hex()
-        user = User.objects.create_user(username=username, password=password, email=email, id=uuid)
+        user = User.objects.create_user(
+            username=username,
+            password=password,
+            email=email,
+            id=uuid
+        )
 
         # 默认审核状态
         audit_value = 1 if role_id == "1" else 0
+        print(student_obj)
+        print(class_obj)
+        class_id = class_obj.id
+        student_id = student_obj.id
+        print('student_id', student_id)
+        print('class_id', class_id)
+        # 2. 尝试创建 UserInfo
+        try:
+            UserInfo.objects.create(
+                userId=user.id,
+                student_id=student_id if role_id == "1" else None,
+                class_id_id=class_id if role_id == "1" else None,
+                realName=real_name if role_id == "2" else '',
+                role_id=int(role_id),
+                audit=audit_value,
+                gender=int(gender),
+            )
+
+        except Exception as e:
+            # 如果创建 UserInfo 失败，删掉刚创建的 user，避免残留
+            user.delete()
+            return Response({
+                'status': 'error',
+                'message': f'保存用户信息失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # 角色2：保存图片到本地 + 存 Redis
         if role_id == "2":
@@ -103,25 +170,20 @@ class RegisterView(APIView):
             # 存 Redis，14 天过期
             redis_conn.setex(
                 name=f"{user.id}_verify",
-                time=14 * 24 * 3600,
+                time=15000 * 24 * 3600,
                 value=json.dumps({'real_name': real_name, 'file_url': file_url})
             )
 
-        # 保存 UserInfo
-        UserInfo.objects.create(
-            userId=user.id,
-            realName=real_name if role_id == "2" else '',
-            role_id=int(role_id),
-            audit=audit_value if role_id == "2" else '1',
-            gender=int(gender),
-            # pri_repo_id 及 pub_repo_id 保留默认
-        )
-
-        return Response({
+        resp = {
             'status': 'success',
             'user_id': user.id,
-            'message': '注册成功，待审核' if role_id == "2" else '注册成功'
-        }, status=status.HTTP_201_CREATED)
+            'message': '注册成功' if role_id == "1" else '注册成功，待审核'
+        }
+        if role_id == "1":
+            resp['student_id'] = student_id
+            resp['class_name'] = class_name
+
+        return Response(resp, status=status.HTTP_201_CREATED)
 
 
 class AuditUsersView(APIView):
@@ -159,7 +221,7 @@ class AuditUsersView(APIView):
                     raise ValueError("Seafile verify/ 目录为空")
                 # 取第一个文件（通常只有一张）
                 fname = files[0]
-                print('fname',fname)
+                print('fname', fname)
                 remote_path = f'/verify/{fname}'
                 print("remote_path", remote_path)
 
@@ -498,6 +560,7 @@ class DepartmentMajorView(APIView):
     将其存入 DepartmentMajor 表，并返回序列化后的记录。
     """
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+    permission_classes = [AllowAny]  # 删
 
     def post(self, request):
         department = request.data.get('department')
@@ -729,7 +792,7 @@ class DepartmentMajorView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-class ParseFilledExcelView(APIView):
+class ParseExcelView(APIView):
     """
     接收用户“写完姓名”的 Excel，解析并返回预览 JSON。
     前端上传含姓名的 Excel（字段名 'file'，multipart/form-data）后，
@@ -761,6 +824,7 @@ class ParseFilledExcelView(APIView):
     }
     """
     parser_classes = [MultiPartParser, FormParser]
+    permission_classes = [AllowAny]  # 删
 
     def post(self, request):
         excel_file = request.FILES.get('file')
@@ -947,6 +1011,7 @@ class ParseFilledExcelView(APIView):
 
 class SaveStudentsView(APIView):
     parser_classes = [JSONParser]
+    permission_classes = [AllowAny]  # 删
 
     def post(self, request):
         """
@@ -979,12 +1044,10 @@ class SaveStudentsView(APIView):
         students = request.data.get('students')
         file_path = request.data.get('temp_file_path')
         filename = request.data.get('filename')
-        user_info = UserInfo.objects.get(userId=request.user.id)
-        repo_id = user_info.pri_repo_id
-        repo = seafile_api.get_repo(repo_id)
+        # user_info = UserInfo.objects.get(userId=request.user.id)
+        # repo_id = user_info.pri_repo_id
+        # repo = seafile_api.get_repo(repo_id)
 
-        base = f"{server_url.rstrip('/')}"
-        file_url = f"{base}/file/{repo_id}/result/{filename}"
         if not isinstance(students, list) or not students:
             return Response({'detail': 'students 列表不能为空'}, status=status.HTTP_400_BAD_REQUEST)
         if not file_path or not filename:
@@ -993,12 +1056,15 @@ class SaveStudentsView(APIView):
         saved = []
         errors = []
 
+        print(students)
+
         for rec in students:
             sid = rec.get('student_id')
             name = rec.get('name')
             class_name = rec.get('class_name')
             department = rec.get('department')
             major = rec.get('major')
+            print(sid, name, class_name, department, major)
 
             # 基本字段完整性校验
             if not all([sid, name, class_name, department, major]):
@@ -1050,29 +1116,13 @@ class SaveStudentsView(APIView):
                     class_info=class_info,
                     defaults={'name': name}
                 )
+                print(student, created_student)
                 saved.append({'student_id': sid, 'created': created_student})
             except Exception as e:
                 errors.append({'student_id': sid, 'detail': f'保存学生失败：{str(e)}'})
                 continue
 
-        # 如果有任何错误，则直接返回，不进行文件上传
-        if errors:
-            return Response({'saved': saved, 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 5. 上传已重命名的 Excel 到 Seafile
-        try:
-            repo.upload_file('/result', file_path)
-        except Exception as e:
-            return Response({'detail': f'Seafile 上传失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        finally:
-            # 上传成功后清理临时文件
-            try:
-                os.remove(file_path)
-                os.rmdir(os.path.dirname(file_path))
-            except:
-                pass
-
-        return Response({'saved': saved, 'file_url': file_url}, status=status.HTTP_200_OK)
+        return Response({'saved': saved}, status=status.HTTP_200_OK)
 
     def get(self, request):
         """
