@@ -23,6 +23,7 @@ class Roles(models.Model):
         return diff
 
     class Meta:
+        db_table = 'roles'
         verbose_name = "角色"
         verbose_name_plural = "角色"
 
@@ -37,6 +38,11 @@ class BlacklistedToken(models.Model):
         refresh = RefreshToken(token)
         cls.objects.create(token=str(refresh))
 
+    class Meta:
+        db_table = 'blacklistedtoken'
+        verbose_name = "token黑名单"
+        verbose_name_plural = "token黑名单"
+
 
 class AnalysisResult(models.Model):
     vulnerabilities = models.IntegerField()  # IntegerField：精确数字
@@ -49,7 +55,7 @@ class AnalysisResult(models.Model):
     severity = models.CharField(max_length=50)  # CharField：短文本
 
     class Meta:
-        db_table = 'code'
+        db_table = 'answer'
         # 指定数据库表名
 
 
@@ -102,13 +108,19 @@ class Class(models.Model):
 
 
 class Student(models.Model):
-    student_id = models.CharField("学号", max_length=50, db_index=True)
+    # id = models.AutoField(primary_key=True)
+    student_id = models.CharField(
+        "学号",
+        max_length=50,
+        db_index=True,
+
+    )
     name = models.CharField("姓名", max_length=50)
     class_info = models.ForeignKey(
         Class,  # 这里通过外键关联到 Class 表
         on_delete=models.PROTECT,  # 禁止删除班级
         verbose_name="班级",
-        related_name="students"  # 可以通过 related_name 来反向查询学生
+        related_name="students",  # 可以通过 related_name 来反向查询学生
     )
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
     updated_at = models.DateTimeField("更新时间", auto_now=True)
@@ -126,12 +138,20 @@ class Student(models.Model):
 
 class UserInfo(models.Model):
     userId = models.IntegerField(primary_key=True)
-    student_id = models.ForeignKey(
-        Student,  # 这里通过外键关联到 Class 表
+    student = models.ForeignKey(
+        'Student',
+        db_column='stu_id',  # 数据库中对应的列名为 stu_id
+        on_delete=models.PROTECT,
+        verbose_name="学号",
+        related_name='user_info',  # 通过 student.user_info 可以反查到关联的 UserInfo
+        null=True,
+        blank=True
+    )
+    class_id = models.ForeignKey(
+        Class,  # 这里通过外键关联到 Class 表
         on_delete=models.PROTECT,  # 禁止删除班级
-        verbose_name="学号表",
-        related_name="students",  # 可以通过 related_name 来反向查询学生
-        null=True
+        verbose_name="班级",
+        related_name="user_info",  # 可以通过 related_name 来反向查询学生
     )
     desc = models.TextField(max_length=500, null=True)
     homePath = models.CharField(max_length=100, null=True)
@@ -144,3 +164,11 @@ class UserInfo(models.Model):
     pri_repo_id = models.CharField(max_length=255, null=True)
     AUDIT_CHOICES = ((0, '待审核'), (1, '已通过'), (2, '已拒绝'))
     audit = models.SmallIntegerField(choices=AUDIT_CHOICES, null=True)
+
+    class Meta:
+        db_table = 'user_info'
+        verbose_name = '用户扩展信息'
+        verbose_name_plural = '用户扩展信息'
+
+    def __str__(self):
+        return f"{self.userId} ({self.student_id if self.student else '无学号'})"
