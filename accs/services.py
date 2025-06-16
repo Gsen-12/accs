@@ -31,7 +31,7 @@ class DifyService:
     def analyze_code(cls, code_content):
         # 调用Dify的请求头
         headers = {
-            "Authorization": f"Bearer {settings.DIFY_API_KEY}",  # Dify_key在settings
+            "Authorization": f"Bearer {settings.DIFY_API_KEY}",
             "Content-Type": "application/json"
         }
 
@@ -52,7 +52,7 @@ class DifyService:
             response = requests.post(url, headers=headers, json=payload)
             print("response:", response)
             resp_json = response.json()
-            print('ddddyyyyyy', resp_json)
+            print('resp_json', resp_json)
             # 处理报错
             if isinstance(resp_json, dict) and resp_json.get('status') not in (None, 200):
                 time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')    # 打印报错时间
@@ -89,35 +89,6 @@ class DifyService:
                     'status': getattr(response, 'status', None) or 500,
                 }
 
-    '''
-    @classmethod
-    def _handle_response(cls, response_data):
-        try:
-            # 处理可能的Markdown格式
-            raw_answer = response_data.get('answer', '{}').replace('```json', '').replace('```', '')
-            parsed_data = json.loads(raw_answer)
-
-            # 数据提取路径修正
-            analysis_data = parsed_data.get('data', {})
-            analysis_summary = analysis_data.get('analysis_summary', {})
-            metadata = analysis_data.get('metadata', {})
-
-            return {
-                'vulnerabilities': int(analysis_summary.get('vulnerabilities', 0)),
-                'errors': int(analysis_summary.get('errors', 0)),
-                'code_smells': int(analysis_summary.get('code_smells', 0)),
-                'accepted_issues': int(analysis_summary.get('accepted_issues', 0)),
-                'duplicates': int(analysis_summary.get('duplicates', 0)),
-                'timestamp': metadata.get('timestamp', ''),
-                'type': analysis_data.get('type', ''),
-                'severity': metadata.get('severity', '')
-            }
-
-        except Exception as e:
-            print(f"Dify数据解析失败: {str(e)}")
-            raise
-            '''
-
     @classmethod
     def _handle_response(cls, response_data):
         try:
@@ -125,15 +96,24 @@ class DifyService:
             # 处理可能的markdown格式
             raw_answer = re.sub(r"```json?|```", '', raw_answer)
             print("处理后的内容：", raw_answer)
-            parsed = json.loads(raw_answer)
+            json_texts = re.findall(r"\{[\s\S]*?\}", raw_answer)
+            combined = {}
+            for text in json_texts:
+                try:
+                    part = json.loads(text)
+                    combined.update(part)
+                except json.JSONDecodeError:
+                    continue
             # 返回数据转换
             return {
-                'vulnerabilities': int(parsed.get('vulnerabilities', 0)),
-                'errors': int(parsed.get('errors', 0)),
-                'code_smells': int(parsed.get('code_smells', 0)),
-                'accepted_issues': int(parsed.get('accepted_issues', 0)),
-                'duplicates': int(parsed.get('duplicates', 0)),
-                'type': parsed.get('type', []),
+                'vulnerabilities': int(combined.get('vulnerabilities', 0)),
+                'errors': int(combined.get('errors', 0)),
+                'code_smells': int(combined.get('code_smells', 0)),
+                'accepted_issues': int(combined.get('accepted_issues', 0)),
+                'duplicates': int(combined.get('duplicates', 0)),
+                'type': combined.get('type', []),
+                'correct_code': combined.get('correct_code', ''),
+                'description': combined.get('description', '')
             }
         except Exception as e:
             print(f"Dify数据转换失败: {e}")
@@ -179,7 +159,6 @@ class DifyAnswer:
 
             # 打印原始响应
             print("\n" + "=" * 50 + " 原始响应内容 " + "=" * 50)
-            # print(response.text)
             print("resp_json:", resp_json)
             print("=" * 120 + "\n")
 

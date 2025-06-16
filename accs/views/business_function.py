@@ -6,9 +6,9 @@ import tempfile
 import pandas as pd
 from django.contrib.auth import get_user_model
 from django_redis import get_redis_connection
-from rest_framework import status
+from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -79,11 +79,27 @@ class AnalyzeCodeView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        user = request.user
-        user_id = user.id
-
         try:
-            print("学生输入的内容:", request.data)
+            user_id = int(request.data.get('id'))
+            print('1', user_id)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid or missing 'id' parameter"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 2. 用 select_related 预先把外键的 Class 一起查出来，避免两次查询
+        try:
+            user_info = UserInfo.objects.select_related('class_id').get(userId=user_id)
+        except UserInfo.DoesNotExist:
+            return Response({"error": "UserInfo not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # 3. 直接拿 class_name：
+        class_obj = user_info.class_id  # Class 实例
+        class_pk = user_info.class_id_id  # 整数 ID
+        class_name = class_obj.class_name  # 字符串名字
+
+        # —— debug 打印（可删） ——
+        print(f"找到用户 {user_id}，班级 ID={class_pk}，班级名={class_name}")
+        print("学生输入的内容:", request.data)
+        try:
             raw_input = request.data.get('code', '')
             md_matches = re.findall(r"```(?:[\w+-]*\n)?([\s\S]*?)```", raw_input)
             code = md_matches[0] if md_matches else raw_input
@@ -146,6 +162,10 @@ class AnalyzeCodeView(APIView):
             accepted = result_data.get('accepted_issues', 0)
             # 重复
             dup = result_data.get('duplicates', 0)
+            # 修复后的代码
+            correct = result_data.get('correct_code', '')
+            # 修复建议
+            des = result_data.get('description', '')
 
             # 计算 severity
             def compute_severity(vul, err, smells, accepted, dup):
@@ -171,17 +191,30 @@ class AnalyzeCodeView(APIView):
                 'duplicates': dup,
                 'type': type_str,
                 'severity': severity_value,
-                'user': request.user.id,
+                'user': user_id,
+                'correct_code': correct,
+                'description': des,
             }
             print("cleaned_data:", cleaned_data)
 
             redis_conn = get_redis_connection('analyze')
             redis_conn.setex(
-                name=f"{group_id}_{user.id}_file_upload",
+                name=f"{class_name}_{user_id}_file_upload",
                 time=604800,  # 7天
                 value=json.dumps(cleaned_data)
             )
-            return Response(status=status.HTTP_201_CREATED)
+            return Response({
+                'vulnerabilities': vul,
+                'errors': err,
+                'code_smells': smells,
+                'accepted_issues': accepted,
+                'duplicates': dup,
+                'type': type_str,
+                'severity': severity_value,
+                'correct_code': correct,
+                'description': des,
+                'user': user_id,
+            }, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
@@ -262,80 +295,6 @@ class AnalysisHistoryView(APIView):
         queryset = AnalysisResult.objects.filter(user=request.user)
         serializer = AnalysisSerializer(queryset, many=True)
         return Response(serializer.data)
-
-
-class AddAnswerView(APIView):
-    def post(self, request):
-        user = request.user
-        user_id = user.id
-        group_id = GroupAssignment.objects.get(userId=user_id).groupId
-        if not group_id:
-            return Response({
-                "code": 500,
-                "error": "您没有班级，请去加入班级再来提交"
-            }, status=403)
-        try:
-
-            print("学生输入的内容:", request.data)
-            raw_input = request.data.get('code', '')
-            md_matches = re.findall(r"```(?:[\w+-]*\n)?([\s\S]*?)```", raw_input)
-            code = md_matches[0] if md_matches else raw_input
-            # 重试调用
-            # result_data = None
-            result_data = DifyAnswer.analyze_code(code)
-            print("result_data=", result_data)
-            # —— 如果 service 层返回了错误信息，直接返回给前端 ——
-            if isinstance(result_data, dict) and 'error_message' in result_data:
-                raw_msg = result_data['error_message']
-                http_status = result_data['status']
-                print('http_status:', http_status)
-                if raw_msg == 'Access token is invalid':
-                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
-                elif raw_msg == "The app's API service has been disabled.":
-                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
-                elif 'Server Unavailable Error' in raw_msg or 'Network is unreachable' in raw_msg:
-                    detail = f'{http_status}，如果问题仍然存在，请联系管理员。'
-                else:
-                    detail = f"【系统提示】{raw_msg}，如果问题仍然存在，请联系管理员。"
-                return Response(
-                    {
-                        'detail': detail,
-                    },
-                    status=result_data.get(status, status.HTTP_503_SERVICE_UNAVAILABLE),
-                )
-            last_exception = None
-            # 调用三次Dify再返回报错
-            for attempt in range(1, 4):
-                try:
-                    url = DifyAnswer.analyze_code(url)
-                    print(f"Attempt {attempt} to DifyService at {url}")
-                    result_data = DifyService.analyze_code(code)
-                    if result_data is not None:
-                        break
-                except Exception as ex:
-                    last_exception = ex
-            if result_data is None:
-                raise Exception(f"DifyService尝试3次失败: {last_exception}")
-
-            # 规范数据
-            cleaned_data = {
-                'correct_code': result_data.get('correct_code', ''),
-                'description': result_data.get('description', '')
-            }
-            print("cleaned_data:", cleaned_data)
-
-            redis_url = f"{cleaned_data}"
-
-            redis_conn = get_redis_connection('answer')
-            redis_conn.setex(
-                name=f"{group_id}_{user.id}_file_upload",
-                time=604800,  # 7天
-                value=json.dumps(cleaned_data)
-            )
-            return Response(status=status.HTTP_201_CREATED)
-
-        except Exception as e:
-            return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
 class TeaAnswerView(APIView):
