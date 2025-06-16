@@ -136,6 +136,21 @@ class RolesSerializer(serializers.ModelSerializer):
         return value
 
 
+class UserRoleUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserInfo
+        fields = ['role_id']  # 只包含需要更新的字段
+        extra_kwargs = {
+            'role_id': {'required': True}
+        }
+
+    def validate_role_id(self, value):
+        """验证角色是否有效"""
+        if not Roles.objects.filter(role_id=value).exists():
+            raise serializers.ValidationError("指定的角色不存在")
+        return value
+
+
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
