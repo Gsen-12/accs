@@ -12,7 +12,7 @@ from .views.business_function import (
     AnalysisHistoryView,
     # TestViewSet,
 )
-from .views.custom_system import(
+from .views.custom_system import (
     RegisterView,
     LoginView,
     LogoutView,
@@ -27,6 +27,7 @@ from .views.custom_system import(
     ParseExcelView,
     AuditUsersView,
     SaveStudentsView,
+    AdminUserRoleModificationView,
 )
 
 router = DefaultRouter()
@@ -44,6 +45,7 @@ urlpatterns = [
     path('admin/roles/', AdminRoleView.as_view(), name='admin-roles'),
     path('admin/roles/modification/', AdminRoleModificationView.as_view(), name='admin-roles-modification'),
     path('admin/roles/<int:role_id>/', AdminRoleView.as_view(), name='admin-role-detail'),
+    path('admin/User/roles/modification/', AdminUserRoleModificationView.as_view(), name='admin-User-roles-modification'),
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
     path('upload-code/', FileUploadView.as_view(), name='file-upload'),

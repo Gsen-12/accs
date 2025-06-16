@@ -1671,3 +1671,74 @@ class AdminRoleModificationView(APIView):
                 "code": 404,
                 "message": "角色不存在"
             }, status=404)
+
+class AdminUserRoleModificationView(APIView):  # 类名去重
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request):
+        # 1. 参数提取与验证
+        user_id = request.data.get('user_id')
+        role_id = request.data.get('role_id')
+
+        if not user_id:
+            return Response({
+                "code": 400,
+                "message": "请填写要修改的用户ID"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if not role_id:
+            return Response({
+                "code": 400,
+                "message": "请填写角色ID"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. 提前获取用户对象
+        try:
+            user = UserInfo.objects.get(userId=user_id)
+        except UserInfo.DoesNotExist:
+            return Response({
+                "code": 404,
+                "message": "用户不存在"
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 3. 检查角色是否实际需要修改
+        if user.role_id == role_id:
+            return Response({
+                "code": 400,
+                "message": "用户角色未变更"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 4. 验证角色是否存在
+        if not Roles.objects.filter(role_id=role_id).exists():
+            return Response({
+                "code": 400,
+                "message": "指定的角色不存在"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 5. 使用指定用户的序列化器实例
+        serializer = UserRoleUpdateSerializer(
+            instance=user,
+            data={'role_id': role_id},
+            partial=True
+        )
+
+        if serializer.is_valid():
+            try:
+                serializer.save()
+                return Response({
+                    "code": 200,
+                    "data": serializer.data,
+                    "message": "用户角色修改成功"
+                })
+            except Exception as e:  # 捕获数据库操作异常
+                logger.error(f"角色更新失败: {str(e)}")
+                return Response({
+                    "code": 500,
+                    "message": "服务器内部错误"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            return Response({
+                "code": 400,
+                "errors": serializer.errors,
+                "message": "数据验证失败"
+            }, status=status.HTTP_400_BAD_REQUEST)

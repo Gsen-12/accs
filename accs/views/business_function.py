@@ -6,18 +6,18 @@ import tempfile
 import pandas as pd
 from django.contrib.auth import get_user_model
 from django_redis import get_redis_connection
-from rest_framework import status, viewsets
+from rest_framework import status
 from rest_framework.decorators import api_view
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from seafileapi import SeafileAPI
 
 from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url
-from accs.models import UserInfo, IPConfig, AnalysisResult, Class, Student
+from accs.models import UserInfo, IPConfig, AnalysisResult, Student
 from accs.serializers import AnalysisSerializer
-from accs.services import get_reliable_local_ip, DifyAnswer, DifyService
+from accs.services import get_reliable_local_ip, DifyService
 
 User = get_user_model()
 
@@ -388,83 +388,141 @@ class AnswerConfirmView(APIView):
 
 class SaveExeclView(APIView):
     def post(self, request):
-        user = request.user
-        user_info = UserInfo.objects.get(userId=request.user.id)
-        repo_id = user_info.pri_repo_id
+        # 获取请求参数
         execlname = request.data.get('execlname')
-        groupId = request.data.get('groupId')
-        seafile_path = f"/result/{execlname}.xlsx"
-        if not {'groupId'}.issubset(request.data):
-            return Response({"code": 400, "message": "缺少必要参数"}, status=400)
-        if not {"execlname"}.issubset(request.data):
-            return Response({"code": 400, "message": "请为表格命名"}, status=400)
-        redis_conn = get_redis_connection("answer")
-        print('redis_conn:', redis_conn)
-        value = [x.decode() for x in redis_conn.keys() if x.decode().split('_')[0] == groupId]
-        print('value', value)
+        class_name = request.data.get('class_name')
+        save_path = request.data.get('path')  # 用户指定的保存路径
 
-        cache_value = " ".join(value)
-        keys = redis_conn.mget(value)
-        print('01', keys)
-        user = request.groupId if request.groupId.is_authenticated else None
-        print('user:', user)
-        queryset = redis_conn.objects
-        print('queryset:', queryset)
-        if user:
-            queryset = queryset.filter(groupId=groupId)
-        result_obj = queryset.order_by('groupId')
-        print('result_obj:', result_obj)
-        if not result_obj:
-            return Response({'detail': '未找到分析结果'}, status=status.HTTP_404_NOT_FOUND)
-
-        # 3. 将结果字段存入 DataFrame
-        data = {
-            'correct_code': result_obj.correct_code,
-            'description': result_obj.description,
-        }
-
-        df = pd.DataFrame([data])
-        print('df:', df)
-
-        # 4. 写入 Excel
-        table_filename = f"{execlname}.xlsx"
-        temp_dir = tempfile.mkdtemp()
-        table_path = os.path.join(temp_dir, table_filename)
-        try:
-            df.to_excel(table_path, index=False)
-        except Exception as e:
-            return Response({'detail': f'生成表格失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # 1) 使用 pandas 创建 DataFrame，把返回 JSON 放入第一格
-        df = pd.DataFrame([[data]], columns=['hhh'])
-        table_filename = f"{execlname}.xlsx"
-        table_path = os.path.join(temp_dir, table_filename)
-        df.to_excel(table_path, index=False)
-
-        try:
-            # 2) 上传表格到 Seafile
-            repo = seafile_api.get_repo(repo_id)
-            # 上传表格文件
-            repo.upload_file('/result', table_path)
-
-            # 构造访问 URL
-            base = f"{server_url.rstrip('/')}"
-            table_url = f"{base}/{repo_id}/result/{table_filename}"
-
+        # 参数验证
+        required_params = {'execlname', 'class_name', 'path'}
+        if not required_params.issubset(request.data):
+            missing = required_params - set(request.data.keys())
             return Response({
-                'table_file_url': table_url,
-            }, status=status.HTTP_201_CREATED)
+                "code": 400,
+                "message": f"缺少必要参数: {', '.join(missing)}"
+            }, status=400)
 
-        except Exception as e:
-            return Response({'detail': f'Seafile 上传失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # 验证路径是否合法
+        if not os.path.isdir(save_path):
+            return Response({
+                "code": 400,
+                "message": "提供的路径不存在或不是目录"
+            }, status=400)
 
-        finally:
-            # 清理本地临时目录
+        # 从Redis获取数据
+        redis_conn = get_redis_connection("answer")
+
+        # 构建Redis key模式: {class_name}_{student_id}_file_upload
+        redis_key_pattern = f"{class_name}_*_file_upload"
+        redis_keys = [k.decode() for k in redis_conn.keys(redis_key_pattern)]
+
+        if not redis_keys:
+            return Response({
+                "detail": f"未找到班级 '{class_name}' 的分析结果"
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 获取所有键对应的值
+        redis_values = redis_conn.mget(redis_keys)
+
+        # 准备数据结构
+        data_list = []
+        student_ids = set()
+
+        # 第一步：提取学生ID并准备批量查询
+        for key in redis_keys:
+            # 从key中提取student_id: {class_name}_{student_id}_file_upload
+            parts = key.split('_')
+            if len(parts) >= 3:
+                student_id = parts[1]  # 假设student_id是key的第二部分
+                student_ids.add(student_id)
+
+        # 批量查询学生信息
+        students = Student.objects.filter(student_id__in=student_ids)
+        student_map = {str(student.student_id): student for student in students}
+
+        # 第二步：处理Redis数据
+        for key, value in zip(redis_keys, redis_values):
+            if not value:
+                continue
+
+            # 从key中提取student_id
+            parts = key.split('_')
+            if len(parts) < 3:
+                continue
+
+            student_id = parts[1]
+            student = student_map.get(student_id)
+
+            if not student:
+                # 如果找不到学生信息，使用默认值
+                student_name = "未知学生"
+                class_info = "未知班级"
+            else:
+                student_name = student.name
+                class_info = student.class_info.name if student.class_info else "未知班级"
+
             try:
-                os.remove(table_path)
-                os.rmdir(temp_dir)
-            except:
-                pass
+                # 解析Redis值 (假设存储的是JSON字符串)
+                data_dict = json.loads(value.decode())
+
+                # 获取correct_code和description
+                correct_code = data_dict.get('correct_code', '')
+                description = data_dict.get('description', '')
+
+                # 添加到数据列表
+                data_list.append({
+                    '学号': student_id,
+                    '姓名': student_name,
+                    '班级': class_info,
+                    'correct_code': correct_code,
+                    'description': description
+                })
+
+            except json.JSONDecodeError:
+                # 如果解析失败，存储原始值
+                data_list.append({
+                    '学号': student_id,
+                    '姓名': student_name,
+                    '班级': class_info,
+                    'correct_code': '解析错误',
+                    'description': value.decode()
+                })
+
+        # 如果没有有效数据
+        if not data_list:
+            return Response({
+                "detail": "未找到有效的分析结果数据"
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 创建DataFrame
+        try:
+            df = pd.DataFrame(data_list)
+            # 重新排序列顺序
+            df = df[['学号', '姓名', '班级', 'correct_code', 'description']]
+        except Exception as e:
+            return Response({
+                'detail': f'创建数据框失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 构建完整文件路径
+        filename = f"{execlname}.xlsx"
+        full_path = os.path.join(save_path, filename)
+
+        # 保存Excel文件
+        try:
+            df.to_excel(full_path, index=False)
+        except Exception as e:
+            return Response({
+                'detail': f'保存Excel文件失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # 返回成功响应
+        return Response({
+            "code": 200,
+            "message": "文件保存成功",
+            "path": full_path,
+            "student_count": len(data_list)
+        }, status=status.HTTP_200_OK)
 # @api_view(['POST'])
 # def set_save_execl(request):
 #     try:
