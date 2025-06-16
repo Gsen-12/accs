@@ -9,6 +9,7 @@ import pandas as pd
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.core.files.storage import default_storage
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from django.db.models import Q
 from django.http import JsonResponse
@@ -1337,39 +1338,36 @@ class SaveStudentsView(APIView):
                 try:
                     student = Student.objects.get(id=id_val)
                     if str(student.student_id) != str(sid):
-                        errors.append(f"第 {idx + 1} 项: student_id '{sid}' 与记录不匹配")
-                    else:
-                        # 获取完整的院系专业信息
-                        class_info = student.class_info
-                        department_major = class_info.department_major
+                        raise ValueError("学号不匹配")
 
-                        # 添加详细的预览信息
-                        preview_data.append({
-                            'id': student.id,
-                            'student_id': student.student_id,
-                            'name': student.name,
-                            'class': class_info.class_name,
-                            'department': department_major.department,
-                            'major': department_major.major
-                        })
+                    # 若没有关联对象，这里会抛出 ObjectDoesNotExist
+                    class_info = student.class_info
+                    dept_major = class_info.department_major
+
                 except Student.DoesNotExist:
                     errors.append(f"第 {idx + 1} 项: id '{id_val}' 不存在")
-                except Student.class_info.RelatedObjectDoesNotExist:
-                    errors.append(f"第 {idx + 1} 项: 学生缺少班级信息")
+                except ValueError:
+                    errors.append(f"第 {idx + 1} 项: student_id '{sid}' 与记录不匹配")
+                except ObjectDoesNotExist:
+                    errors.append(f"第 {idx + 1} 项: 学生缺少班级或专业信息")
                 except Exception as e:
-                    errors.append(f"第 {idx + 1} 项: 查询关联信息时发生错误: {str(e)}")
+                    errors.append(f"第 {idx + 1} 项: 查询关联信息时发生错误: {e}")
+                else:
+                    preview_data.append({
+                        'id': student.id,
+                        'student_id': student.student_id,
+                        'name': student.name,
+                        'class': class_info.class_name,
+                        'department': dept_major.department,
+                        'major': dept_major.major
+                    })
 
-            # 返回错误或预览数据
-            if errors:
-                return Response(
-                    {
-                        'detail': '删除请求包含错误',
-                        'errors': errors,
-                        'preview': preview_data
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            else:
+                if errors:
+                    return Response(
+                        {'detail': '删除请求包含错误', 'errors': errors, 'preview': preview_data},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
                 return Response(
                     {
                         'detail': '请确认以下待删除学生，删除后该学号就为空值',
