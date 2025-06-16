@@ -10,6 +10,7 @@ from .views.business_function import (
     SaveExeclView,
     AnalyzeCodeView,
     AnalysisHistoryView,
+    # TestViewSet,
 )
 from .views.custom_system import(
     RegisterView,
@@ -46,7 +47,7 @@ urlpatterns = [
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
     path('upload-code/', FileUploadView.as_view(), name='file-upload'),
-    path('analyze/', AnalyzeCodeView.as_view(), name='analyze-code'),
+    # path('test/', TestViewSet.as_view(), name='test'),
     path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
     path('current-dify-ip/', business_function.current_dify_ip, name='current-dify-ip'),
     path('set-dify-ip/', business_function.set_dify_ip, name='set-dify-ip'),
@@ -61,5 +62,6 @@ urlpatterns = [
     path('parse/excel', ParseExcelView.as_view(), name='parse-Excel'),
     path('auditusers/', AuditUsersView.as_view(), name='AuditUsers'),
     path('save/stu/', SaveStudentsView.as_view(), name='save-students'),
+    path('analyze/', AnalyzeCodeView.as_view(), name='analyze'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

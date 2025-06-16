@@ -26,8 +26,13 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from seafileapi import SeafileAPI
 
 from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url, admin_repo_id
-from accs.models import DepartmentMajor, Student, Class
-from accs.models import Roles, UserInfo
+from accs.models import (
+    DepartmentMajor,
+    Student,
+    Class,
+    Roles,
+    UserInfo
+)
 from accs.permissions import IsSuperAdmin
 from accs.serializers import DepartmentMajorSerializer
 from accs.serializers import UserSerializer, RolesSerializer, \
