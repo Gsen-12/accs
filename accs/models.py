@@ -152,6 +152,7 @@ class UserInfo(models.Model):
         on_delete=models.PROTECT,  # 禁止删除班级
         verbose_name="班级",
         related_name="user_info",  # 可以通过 related_name 来反向查询学生
+        null=True,
     )
     desc = models.TextField(max_length=500, null=True)
     homePath = models.CharField(max_length=100, null=True)

@@ -299,5 +299,6 @@ GitHub.sublime-settings
 accs/tmp
 accs/test.py
 tmp/
+project
 CorrectionPlatformBackend/settings.py
 .config.json

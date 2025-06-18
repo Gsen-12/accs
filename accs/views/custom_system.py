@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from sqlite3 import IntegrityError
+from venv import logger
 
 import pandas as pd
 from django.conf import settings
@@ -35,7 +36,7 @@ from accs.models import (
     UserInfo
 )
 from accs.permissions import IsSuperAdmin
-from accs.serializers import DepartmentMajorSerializer
+from accs.serializers import DepartmentMajorSerializer, UserRoleUpdateSerializer
 from accs.serializers import UserSerializer, RolesSerializer, \
     validate_image_content
 from accs.utils.middleware import UUIDTools
@@ -130,16 +131,17 @@ class RegisterView(APIView):
         audit_value = 1 if role_id == "1" else 0
         print(student_obj)
         print(class_obj)
-        class_id = class_obj.id
-        student_id = student_obj.id
+        class_id = int(class_obj.id if role_id == "1" else '0')
+        student_id = student_obj.id if role_id == "1" else '0'
         print('student_id', student_id)
         print('class_id', class_id)
+
         # 2. 尝试创建 UserInfo
         try:
             UserInfo.objects.create(
                 userId=user.id,
                 student_id=student_id if role_id == "1" else None,
-                class_id_id=class_id if role_id == "1" else None,
+                class_id_id=class_id if role_id == "1" else '',
                 realName=real_name if role_id == "2" else '',
                 role_id=int(role_id),
                 audit=audit_value,
@@ -262,7 +264,7 @@ class AuditUsersView(APIView):
     def post(self, request):
         user_id = request.data.get('user_id')
         audit = request.data.get('audit')
-        if audit not in (1, 2):
+        if audit not in ("1", "2"):
             return Response({
                 'code': 400,
                 'message': 'audit 必须是 1（通过）或 2（拒绝）'
@@ -306,6 +308,8 @@ class LoginView(APIView):
                 "result": None
             }, status=status.HTTP_200_OK)
 
+        user_id = user.id
+
         # 如果是 role_id = 2，需要检查 audit 状态
         try:
             userinfo = UserInfo.objects.get(userId=user.id)
@@ -331,24 +335,24 @@ class LoginView(APIView):
                     "result": None
                 }, status=status.HTTP_200_OK)
 
-            # —— 新增：检查并创建 Seafile 个人库 —— #
-            try:
-                # 列出当前所有库，检查是否有 name == username 的
-                repo_list = seafile_api.list_repos()
-                has_personal_repo = any(r.get('name') == username for r in repo_list)
-                if not has_personal_repo:
-                    # 创建个人库并初始化目录
-                    repo = seafile_api.create_repo(username)
-                    repo.create_dir('/file')
-                    repo.create_dir('/ava')
-                    repo.create_dir('/result')
+        # —— 新增：检查并创建 Seafile 个人库 —— #
+        try:
+            # 列出当前所有库，检查是否有 name == username 的
+            repo_list = seafile_api.list_repos()
+            has_personal_repo = any(r.get('name') == username for r in repo_list)
+            if not has_personal_repo:
+                # 创建个人库并初始化目录
+                repo = seafile_api.create_repo(username)
+                repo.create_dir('/file')
+                repo.create_dir('/ava')
+                repo.create_dir('/result')
 
-                    # 更新 UserInfo.pri_repo_id
-                    userinfo.pri_repo_id = repo.repo_id
-                    userinfo.save()
-            except Exception as e:
-                # 如果 Seafile 操作失败，不影响登录，但可记录日志
-                print(f"[Seafile] 创建个人库失败: {e}")
+                # 更新 UserInfo.pri_repo_id
+                userinfo.pri_repo_id = repo.repo_id
+                userinfo.save()
+        except Exception as e:
+            # 如果 Seafile 操作失败，不影响登录，但可记录日志
+            print(f"[Seafile] 创建个人库失败: {e}")
 
         try:
             # 生成双令牌
@@ -423,7 +427,7 @@ class MyCustomBackend(TokenObtainPairView):
 
 class GenerateClassExcelView(APIView):
     """
-    接收前端 JSON 数据，生成班级 Excel 并上传到 Seafile。
+    接收前端 JSON 数据
     POST 数据格式示例：
     {
         "class": "高三3班",
@@ -438,25 +442,14 @@ class GenerateClassExcelView(APIView):
     """
 
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+    permission_classes = [AllowAny]  # 删
 
     def post(self, request):
         data = request.data
-        # 1. 读取并校验字段
-        upload_path = data.get("upload_path")
-        if not {'upload_path'}.issubset(request.data):
-            return Response({"message": "请选择你要保存的路径"}, status=400)
-        directory = os.path.dirname(upload_path)
-        # 检查目录是否存在，不存在则创建
-        if not default_storage.exists(directory):
-            # 递归创建目录（包括所有父级目录）
-            os.makedirs(directory, exist_ok=True)
         cls_name = data.get('class', '').strip()
         count = data.get('count')
         dept = data.get('department', '').strip()
         major = data.get('major', '').strip()
-
-        user_info = UserInfo.objects.get(userId=request.user.id)
-        repo_id = user_info.pri_repo_id
 
         # 校验 count 是否为非负整数
         try:
@@ -504,17 +497,20 @@ class GenerateClassExcelView(APIView):
 
         df = pd.DataFrame(rows)
 
-        # 5. 写入临时 Excel
+        temp_dir = tempfile.mkdtemp()
+
+        local_dir = os.path.join(settings.BASE_DIR, 'tmp')
+        os.makedirs(local_dir, exist_ok=True)
+
+        # 构造文件名并保存到本地
+        upload_path = 'project/accs/tmp'
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         filename = f"{major}-{dept}-{cls_name}_{count}_{timestamp}_class_list.xlsx"
-        temp_dir = tempfile.mkdtemp()
         file_path = os.path.join(temp_dir, filename)
-        repo = seafile_api.get_repo(repo_id)
-        base = f"{server_url.rstrip('/')}"
-        file_url = f"{base}/file/{repo_id}/result/{filename}"
+        file_url = f"/accs/tmp/{filename}"
 
         try:
-            # header=False, index=False：不写列名、不写行索引
+            # 保存Excel文件
             df.to_excel(file_path, header=False, index=False)
         except ModuleNotFoundError:
             return Response(
@@ -527,18 +523,11 @@ class GenerateClassExcelView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-        # 6. 上传到 Seafile
+        # 6. 保存到默认存储
         try:
-            repo.upload_file('/result', file_path)
-        except Exception as e:
-            return Response(
-                {'detail': f'Seafile 上传失败：{str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        try:
-            with open(file_path, 'rb') as f:  # 以二进制模式打开文件
+            with open(file_path, 'rb') as f:
                 default_storage.save(
-                    os.path.join(upload_path, f"{filename}.xlsx"),  # 显式添加扩展名
+                    os.path.join(upload_path, filename),
                     f
                 )
         except Exception as e:
@@ -1671,6 +1660,7 @@ class AdminRoleModificationView(APIView):
                 "code": 404,
                 "message": "角色不存在"
             }, status=404)
+
 
 class AdminUserRoleModificationView(APIView):  # 类名去重
     permission_classes = [IsSuperAdmin]
