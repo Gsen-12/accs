@@ -27,7 +27,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from seafileapi import SeafileAPI
 
-from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url, admin_repo_id
+from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url, admin_repo_id, ava_repo_id, repo_token
 from accs.models import (
     DepartmentMajor,
     Student,
@@ -39,7 +39,8 @@ from accs.permissions import IsSuperAdmin
 from accs.serializers import DepartmentMajorSerializer, UserRoleUpdateSerializer
 from accs.serializers import UserSerializer, RolesSerializer, \
     validate_image_content
-from accs.utils.middleware import UUIDTools
+from accs.utils.middleware import UUIDTools, generate_password
+from accs.utils.seafile_operate import SeafileOperations
 
 User = get_user_model()
 
@@ -337,6 +338,7 @@ class LoginView(APIView):
 
         # —— 新增：检查并创建 Seafile 个人库 —— #
         try:
+            password = generate_password()
             # 列出当前所有库，检查是否有 name == username 的
             repo_list = seafile_api.list_repos()
             has_personal_repo = any(r.get('name') == username for r in repo_list)
@@ -348,6 +350,7 @@ class LoginView(APIView):
                 repo.create_dir('/result')
 
                 # 更新 UserInfo.pri_repo_id
+                userinfo.seafile_password = password
                 userinfo.pri_repo_id = repo.repo_id
                 userinfo.save()
         except Exception as e:
@@ -1529,9 +1532,10 @@ class TempAvatarUploadView(APIView):
         avatar_file = request.FILES.get('avatar')
         ext = request.FILES.get('avatar').name.split('.')[-1]
         filename = f"{user.id}_tmp_ava_upload.{ext}"
-        seafile_path = f"/ava/{user.id}_tmp_ava_upload.{ext}"  # Seafile中的存储路径
+        seafile_path = f"/{user.id}_tmp_ava_upload.{ext}"  # Seafile中的存储路径
         user_info = UserInfo.objects.get(userId=request.user.id)
-        repo_id = user_info.pri_repo_id
+        seafile_operations = SeafileOperations(server_url, token=repo_token)
+        repo_id = ava_repo_id
         try:
             # 获取仓库对象
             repo = seafile_api.get_repo(repo_id)
@@ -1545,11 +1549,9 @@ class TempAvatarUploadView(APIView):
                     temp_file.write(chunk)
 
             # 上传到Seafile
-            if filename in [x["name"] for x in repo.list_dir("/ava")]:
+            if filename in [x["name"] for x in repo.list_dir("/")]:
                 repo.delete_file(seafile_path)
-            repo.upload_file("/ava", temp_file_path)
-
-            # 构造文件访问URL
+            repo.upload_file("/", temp_file_path)
             avatar_url = f"{server_url.rstrip('/')}/avatar/{repo_id}{seafile_path}"
 
             # 用户头像信息
@@ -1557,7 +1559,6 @@ class TempAvatarUploadView(APIView):
             user_info.avatar = avatar_url
             user_info.save()
 
-            # 缓存头像路径
             redis_conn = get_redis_connection("default")
             redis_conn.setex(
                 name=f"{user.id}_tmp_ava_upload",
@@ -1565,10 +1566,23 @@ class TempAvatarUploadView(APIView):
                 value=json.dumps(avatar_url)
             )
 
-            return Response({
-                "code": 200,
-                "message": "头像上传成功"
-            })
+            if share_link := seafile_operations.get_share_file_by_repo(repo_id, seafile_path):
+                seafile_operations.delete_share_file_by_repo(repo_id, seafile_path)
+                seafile_operations.post_share_ava_by_repo(repo_id, seafile_path)
+                if 0 < len((links := [x['link'] for x in share_link])) <= 1:
+                    link = links[0] + '?dl=1'
+                    return Response({
+                        "code": 200,
+                        "message": "头像上传成功",
+                        "link": link
+                    })
+                else:
+                    response = seafile_operations.post_share_ava_by_repo(repo_id, temp_file_path)
+                    return Response({
+                        "code": 200,
+                        "message": "头像上传成功",
+                        "link": ([x['link'] + '?dl=1' for x in response if x['path'] == seafile_path]),
+                    })
         except Exception as e:
             return Response({
                 "code": 500,

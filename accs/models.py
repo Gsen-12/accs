@@ -161,6 +161,7 @@ class UserInfo(models.Model):
     role_id = models.IntegerField(null=False)
     GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
     gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
+    seafile_password = models.CharField(max_length=100, null=True)
     pub_repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
     pri_repo_id = models.CharField(max_length=255, null=True)
     AUDIT_CHOICES = ((0, '待审核'), (1, '已通过'), (2, '已拒绝'))
