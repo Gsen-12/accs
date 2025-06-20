@@ -1447,6 +1447,8 @@ class UserModificationView(APIView):
         user_serializer = UserSerializer
         user_info = UserInfo.objects.get(userId=request.user.id)
         repo_id = user_info.pri_repo_id
+        seafile_operations = SeafileOperations(server_url, token=repo_token)
+        repo_id = ava_repo_id
 
         try:
             if user_info.avatar == request.data['avatar'] \
@@ -1473,9 +1475,8 @@ class UserModificationView(APIView):
                     }, status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
 
                 ext = request.FILES.get("avatar").name.split(".")[-1]
-                seafile_path = f"/ava/{user.id}_tmp_ava_upload.{ext}"
-                path = f"/ava/{user.id}_ava_upload.{ext}"
-                temp_filename = f'{user.id}_temp_ava_upload.{ext}'
+                seafile_path = f"/{user.id}_tmp_ava_upload.{ext}"
+                ava_path = f"/{user.id}_ava_upload.{ext}"
                 final_filename = f'{user.id}_ava_upload.{ext}'
                 cache_key = f"{user.id}_tmp_ava_upload"
 
@@ -1486,18 +1487,35 @@ class UserModificationView(APIView):
 
                     repo = seafile_api.get_repo(repo_id)
 
-                    if final_filename in [x["name"] for x in repo.list_dir("/ava")]:
-                        repo.delete_file(path)
+                    if final_filename in [x["name"] for x in repo.list_dir("/")]:
+                        repo.delete_file(ava_path)
                     repo.rename_file(seafile_path, final_filename)
                     user_info = UserInfo.objects.get(userId=user.id)
                     user_info.avatar = f'{server_url}/files/{repo_id}{final_filename}'
                     user_info.save()
 
-                    return Response({
-                        "code": 200,
-                        "avayar_url": user_info.avatar,
-                        "message": "头像更新成功"
-                    })
+                    if seafile_operations.delete_share_file_by_repo(repo_id, ava_path):
+                        seafile_operations.post_share_ava_by_repo(repo_id, ava_path)
+                        share_link = seafile_operations.get_share_file_by_repo(repo_id, ava_path)
+                        if 0 < len((links := [x['link'] for x in share_link])) <= 1:
+                            link = links[0] + '?dl=1'
+                            return Response({
+                                "code": 200,
+                                "message": "头像上传成功",
+                                "data": {
+                                    "link": link
+                                }
+                            })
+                    else:
+                        seafile_operations.post_share_ava_by_repo(repo_id, ava_path)
+                        response = seafile_operations.get_share_file_by_repo(repo_id, ava_path)
+                        return Response({
+                            "code": 200,
+                            "message": "头像上传成功",
+                            "data": {
+                                "link": ([x['link'] + '?dl=1' for x in response if x['path'] == ava_path]),
+                            }
+                        })
                 except Exception as e:
                     return Response({
                         "code": 500,
@@ -1530,10 +1548,10 @@ class TempAvatarUploadView(APIView):
     def post(self, request):
         user = request.user
         avatar_file = request.FILES.get('avatar')
+        user_info = UserInfo.objects.get(userId=request.user.id)
         ext = request.FILES.get('avatar').name.split('.')[-1]
         filename = f"{user.id}_tmp_ava_upload.{ext}"
         seafile_path = f"/{user.id}_tmp_ava_upload.{ext}"  # Seafile中的存储路径
-        user_info = UserInfo.objects.get(userId=request.user.id)
         seafile_operations = SeafileOperations(server_url, token=repo_token)
         repo_id = ava_repo_id
         try:
@@ -1552,7 +1570,7 @@ class TempAvatarUploadView(APIView):
             if filename in [x["name"] for x in repo.list_dir("/")]:
                 repo.delete_file(seafile_path)
             repo.upload_file("/", temp_file_path)
-            avatar_url = f"{server_url.rstrip('/')}/avatar/{repo_id}{seafile_path}"
+            avatar_url = f"{server_url.rstrip('/')}/{repo_id}{seafile_path}"
 
             # 用户头像信息
             user_info = UserInfo.objects.get(userId=user.id)
@@ -1566,23 +1584,28 @@ class TempAvatarUploadView(APIView):
                 value=json.dumps(avatar_url)
             )
 
-            if share_link := seafile_operations.get_share_file_by_repo(repo_id, seafile_path):
-                seafile_operations.delete_share_file_by_repo(repo_id, seafile_path)
+            if seafile_operations.delete_share_file_by_repo(repo_id, seafile_path):
                 seafile_operations.post_share_ava_by_repo(repo_id, seafile_path)
+                share_link = seafile_operations.get_share_file_by_repo(repo_id, seafile_path)
                 if 0 < len((links := [x['link'] for x in share_link])) <= 1:
                     link = links[0] + '?dl=1'
                     return Response({
                         "code": 200,
                         "message": "头像上传成功",
-                        "link": link
+                        "data": {
+                            "link": link
+                        }
                     })
-                else:
-                    response = seafile_operations.post_share_ava_by_repo(repo_id, temp_file_path)
-                    return Response({
-                        "code": 200,
-                        "message": "头像上传成功",
+            else:
+                seafile_operations.post_share_ava_by_repo(repo_id, seafile_path)
+                response = seafile_operations.get_share_file_by_repo(repo_id, seafile_path)
+                return Response({
+                    "code": 200,
+                    "message": "头像上传成功",
+                    "data": {
                         "link": ([x['link'] + '?dl=1' for x in response if x['path'] == seafile_path]),
-                    })
+                    }
+                })
         except Exception as e:
             return Response({
                 "code": 500,

@@ -1,10 +1,6 @@
 import warnings
-from io import TextIOWrapper
-
 import requests
 
-from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url, repo_token, admin_repo_id
-from accs.utils.exceptions import ClientHttpError
 from accs.utils.response import check_response
 
 
@@ -76,14 +72,3 @@ class SeafileOperations:
         )
         if check_response(response):
             return response.json()
-
-
-# response = seafile_operations.share_by_repo('940e9d6f-fe23-44e4-93f0-10111fa7ec84', '/111.jpg')
-# print(response)
-seafile_operations = SeafileOperations(server_url, token=repo_token)
-# response = seafile_operations.delete_share
-# response = seafile_operations.get_share_file_by_repo('940e9d6f-fe23-44e4-93f0-10111fa7ec84', '/111.jpg')
-# response = seafile_operations.get_share_file_by_repo('940e9d6f-fe23-44e4-93f0-10111fa7ec84', '/111.jpg')
-seafile_operations.delete_share_file_by_repo('940e9d6f-fe23-44e4-93f0-10111fa7ec84', '/111.jpg')
-response = seafile_operations.post_share_file_by_repo('940e9d6f-fe23-44e4-93f0-10111fa7ec84', '/111.jpg', password='qbDlrkOHyH')
-print('response', response)
