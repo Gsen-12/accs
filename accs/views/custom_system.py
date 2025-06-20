@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 from sqlite3 import IntegrityError
-from venv import logger
+import logging
 
 import pandas as pd
 from django.conf import settings
@@ -1758,7 +1758,7 @@ class AdminUserRoleModificationView(APIView):  # 类名去重
                     "message": "用户角色修改成功"
                 })
             except Exception as e:  # 捕获数据库操作异常
-                logger.error(f"角色更新失败: {str(e)}")
+                logging.error(f"角色更新失败: {str(e)}")
                 return Response({
                     "code": 500,
                     "message": "服务器内部错误"

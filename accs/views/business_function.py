@@ -14,10 +14,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from seafileapi import SeafileAPI
 
-from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url
+from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url, repo_token
 from accs.models import UserInfo, IPConfig, AnalysisResult, Student
 from accs.serializers import AnalysisSerializer
 from accs.services import get_reliable_local_ip, DifyService
+from accs.utils.seafile_operate import SeafileOperations
 
 User = get_user_model()
 
@@ -27,35 +28,70 @@ seafile_api.auth()  # 认证
 
 class FileUploadView(APIView):
     permission_classes = [IsAuthenticated]
+    # permission_classes = [AllowAny]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
         user = request.user
-        user_info = UserInfo.objects.get(userId=request.user.id)
-        repo_id = user_info.pri_repo_id
-        user_file = request.FILES.get('file')
-        ext = request.FILES.get('file').name.split('.')[-1]
-        filename = f"{user.id}_file_upload.{ext}"
-        seafile_path = f"/file/{user.id}_file_upload.{ext}"  # Seafile中的存储路径
         try:
-            # 获取仓库对象
-            repo = seafile_api.get_repo(repo_id)
+            user_info = UserInfo.objects.get(userId=user.id)
+        except UserInfo.DoesNotExist:
+            return Response({
+                'code': 404,
+                'error': '未找到用户信息，请联系管理员'
+            }, status=404)
 
-            # 创建临时目录保存文件（确保文件名正确）
-            dir = tempfile.mkdtemp()
-            file_path = os.path.join(dir, filename)
+        repo_id = user_info.pri_repo_id
 
-            with open(file_path, 'wb') as temp_file:
+        user_file = request.FILES.get('file')
+        print(user_file)
+        print(request.data)
+        if not user_file:
+            return Response({
+                'code': 400,
+                'error': '未找到上传文件'
+            }, status=400)
+
+        ext = user_file.name.rsplit('.', 1)[-1]
+        filename = f"{user.id}_file_upload.{ext}"
+        seafile_path = f"/file/{filename}"
+
+        seafile_ops = SeafileOperations(server_url, token=repo_token)
+
+        try:
+            # 1. 创建临时目录并保存上传文件
+            tmp_dir = tempfile.mkdtemp()
+            local_path = os.path.join(tmp_dir, filename)
+            with open(local_path, 'wb') as f:
                 for chunk in user_file.chunks():
-                    temp_file.write(chunk)
+                    f.write(chunk)
 
-            # 上传到Seafile
-            if filename in [x["name"] for x in repo.list_dir("/file")]:
+            # 2. 上传到 Seafile
+            repo = seafile_api.get_repo(repo_id)
+            existing = [info['name'] for info in repo.list_dir('/file')]
+            if filename in existing:
                 repo.delete_file(seafile_path)
-            repo.upload_file("/file", file_path)
+            repo.upload_file('/file', local_path)
 
-            # 构造文件访问URL
-            file_url = f"{server_url.rstrip('/')}/file/{repo_id}{seafile_path}"
+            # 分享链接管理：删除旧链接，再创建新链接
+            seafile_ops.delete_share_file_by_repo(
+                repo_id=repo_id,
+                file_path=seafile_path
+            )
+            password = getattr(user_info, 'seafile_password', '')
+            share_info = seafile_ops.post_share_file_by_repo(
+                repo_id=repo_id,
+                file_path=seafile_path,
+                password=password
+            )
+            print(share_info)
+            # 处理 API 返回可能为 list 或 dict
+            if isinstance(share_info, list):
+                info = share_info[0] if share_info else {}
+            else:
+                info = share_info or {}
+            file_url = info.get('link') or info.get('url')
+            print(file_url)
 
             redis_conn = get_redis_connection("file")
             redis_conn.setex(
@@ -65,13 +101,14 @@ class FileUploadView(APIView):
             )
 
             return Response({
-                "code": 200,
-                "message": "文件上传成功"
+                'code': 200,
+                'message': '文件上传并生成分享链接成功',
+                'data': {'file_url': file_url}
             })
         except Exception as e:
             return Response({
-                "code": 500,
-                "error": f"上传失败：{str(e)}"
+                'code': 500,
+                'error': f'上传或分享链接生成失败：{str(e)}'
             }, status=500)
 
 
