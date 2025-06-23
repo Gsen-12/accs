@@ -89,6 +89,8 @@ class RegisterView(APIView):
 
         student_obj = None
         class_obj = None
+        uuid = UUIDTools().uuid4_hex()
+        user_id = uuid
 
         if role_id == "1":
             # 1. 检查学号
@@ -98,9 +100,9 @@ class RegisterView(APIView):
                     status=400
                 )
             # 2. 检查班级
+            # 3. 分别查 Student 和 Class
             if not class_name:
                 return Response({'status': 'error', 'message': 'class_name（班级名）未填写'}, status=400)
-            # 3. 分别查 Student 和 Class
             try:
                 class_obj = Class.objects.get(class_name=class_name)
             except Class.DoesNotExist:
@@ -121,6 +123,16 @@ class RegisterView(APIView):
             if student_obj.class_info_id != class_obj.id:
                 return Response({'status': 'error', 'message': '学号和班级不匹配，请确认后再试'}, status=400)
 
+            try:
+                # 使用反向关系检查注册状态
+                if hasattr(student_obj, 'user_info'):
+                    return Response({
+                        'status': 'error',
+                        'message': '该学号已被注册'
+                    }, status=400)
+            except AttributeError:
+                pass
+
         if role_id == "2":
             if not real_name or not avatar_file:
                 return Response({'status': 'error', 'message': '请提供真实姓名和审核图片'}, status=400)
@@ -128,12 +140,11 @@ class RegisterView(APIView):
                 return Response({'status': 'error', 'message': '该真实姓名已被使用，请换一个'}, status=400)
 
         # 创建 Django 用户
-        uuid = UUIDTools().uuid4_hex()
         user = User.objects.create_user(
             username=username,
             password=password,
             email=email,
-            id=uuid
+            id=user_id
         )
 
         # 默认审核状态
@@ -144,10 +155,9 @@ class RegisterView(APIView):
         student_id = student_obj.id if role_id == "1" else '0'
         print('student_id', student_id)
         print('class_id', class_id)
-
         # 2. 尝试创建 UserInfo
         try:
-            UserInfo.objects.create(
+            user_info = UserInfo.objects.create(
                 userId=user.id,
                 student_id=student_id if role_id == "1" else None,
                 class_id_id=class_id if role_id == "1" else '',
@@ -156,14 +166,25 @@ class RegisterView(APIView):
                 audit=audit_value,
                 gender=int(gender),
             )
-
-        except Exception as e:
+        except IntegrityError as e:
             # 如果创建 UserInfo 失败，删掉刚创建的 user，避免残留
+            user.delete()
+            if 'user_info_student_id' in str(e):
+                return Response({
+                    'status': 'error',
+                    'message': '该学号已被其他用户注册'
+                }, status=400)
+            else:
+                return Response({
+                    'status': 'error',
+                    'message': f'数据库错误: {str(e)}'
+                }, status=500)
+        except Exception as e:
             user.delete()
             return Response({
                 'status': 'error',
                 'message': f'保存用户信息失败: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            }, status=500)
 
         # 角色2：保存图片到本地 + 存 Redis
         if role_id == "2":
@@ -346,7 +367,6 @@ class LoginView(APIView):
 
         # —— 新增：检查并创建 Seafile 个人库 —— #
         try:
-            password = generate_password()
             # 列出当前所有库，检查是否有 name == username 的
             repo_list = seafile_api.list_repos()
             has_personal_repo = any(r.get('name') == username for r in repo_list)
@@ -354,11 +374,9 @@ class LoginView(APIView):
                 # 创建个人库并初始化目录
                 repo = seafile_api.create_repo(username)
                 repo.create_dir('/file')
-                repo.create_dir('/ava')
                 repo.create_dir('/result')
 
                 # 更新 UserInfo.pri_repo_id
-                userinfo.seafile_password = password
                 userinfo.pri_repo_id = repo.repo_id
                 userinfo.save()
         except Exception as e:

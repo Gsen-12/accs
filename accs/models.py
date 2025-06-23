@@ -141,14 +141,15 @@ class Student(models.Model):
 
 class UserInfo(models.Model):
     userId = models.IntegerField(primary_key=True)
-    student = models.ForeignKey(
+    student = models.OneToOneField(
         'Student',
         db_column='stu_id',  # 数据库中对应的列名为 stu_id
         on_delete=models.PROTECT,
         verbose_name="学号",
         related_name='user_info',  # 通过 student.user_info 可以反查到关联的 UserInfo
         null=True,
-        blank=True
+        blank=True,
+        unique = True
     )
     class_id = models.ForeignKey(
         Class,  # 这里通过外键关联到 Class 表
@@ -164,7 +165,6 @@ class UserInfo(models.Model):
     role_id = models.IntegerField(null=False)
     GENDER_CHOICES = ((0, '女'), (1, '男'), (2, '保密'))
     gender = models.SmallIntegerField(choices=GENDER_CHOICES, default=0)
-    seafile_password = models.CharField(max_length=100, null=True)
     pub_repo_id = models.CharField(max_length=255, null=True, default='ad406967-dd0d-4d5c-949c-cdd62d21b9fe')
     pri_repo_id = models.CharField(max_length=255, null=True)
     AUDIT_CHOICES = ((0, '待审核'), (1, '已通过'), (2, '已拒绝'))

@@ -79,13 +79,13 @@ class UserSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(required=True)
     pri_repo_id = serializers.CharField(required=False)
     pub_repo_id = serializers.CharField(required=False)
-    seafile_password = serializers.CharField(required=False)
-
     class Meta:
         model = User
         fields = [
             'id', 'username', 'password', 'email', 'userId', 'desc', 'homePath', 'avatar', 'realName', 'role_id',
-            'token', 'gender', 'pri_repo_id', 'pub_repo_id', 'seafile_password'
+
+            'token', 'gender', 'pri_repo_id', 'pub_repo_id'
+
         ]
         extra_kwargs = {
             'password': {'write_only': True},
