@@ -9,7 +9,6 @@ import logging
 import pandas as pd
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
-from django.core.files.storage import default_storage
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from django.db.models import Q
@@ -33,19 +32,28 @@ from accs.models import (
     Student,
     Class,
     Roles,
-    UserInfo
+    UserInfo,
+    SubmissionTemplate,
+    StudentSubmission,
 )
 from accs.permissions import IsSuperAdmin
-from accs.serializers import DepartmentMajorSerializer, UserRoleUpdateSerializer
-from accs.serializers import UserSerializer, RolesSerializer, \
-    validate_image_content
+from accs.serializers import (
+    DepartmentMajorSerializer,
+    UserRoleUpdateSerializer,
+    UserSerializer,
+    RolesSerializer,
+    validate_image_content,
+    SubmissionTemplateSerializer,
+    StudentSubmissionSerializer,
+)
 from accs.utils.middleware import UUIDTools, generate_password
-from accs.utils.seafile_operate import SeafileOperations
+from accs.utils.seafile_operate import SeafileOperations, FileUpload
 
 User = get_user_model()
 
 seafile_api = SeafileAPI(login_name, pwd, server_url)
 seafile_api.auth()  # 认证
+seafile_ops = SeafileOperations(server_url, repo_token)
 
 
 def csrf_failure(request, reason=""):
@@ -430,7 +438,8 @@ class MyCustomBackend(TokenObtainPairView):
 
 class GenerateClassExcelView(APIView):
     """
-    接收前端 JSON 数据
+    接收前端 JSON 数据，生成班级 Excel 并上传到 Seafile，返回上传结果；
+    GET 方法用来生成并返回下载链接。
     POST 数据格式示例：
     {
         "class": "高三3班",
@@ -438,14 +447,9 @@ class GenerateClassExcelView(APIView):
         "department": "信息工程学院",
         "major": "计算机科学与技术"
     }
-    Excel 内容：
-    A1: 院系：<department>   B1: 专业：<major>   C1: 班级：<class>
-    A2: 学号              B2: 姓名   C2:（空）
-    A3~A(N+2): 1~N       B3~B(N+2): 空   C3~C(N+2): 空
     """
-
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    permission_classes = [AllowAny]  # 删
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         data = request.data
@@ -454,102 +458,103 @@ class GenerateClassExcelView(APIView):
         dept = data.get('department', '').strip()
         major = data.get('major', '').strip()
 
-        # 校验 count 是否为非负整数
+        # 校验 count
         try:
             count = int(count)
             if count < 0:
                 raise ValueError
         except Exception:
-            return Response(
-                {'detail': f'学生人数 {count} 必须为非负整数'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'detail': f'学生人数 {count} 必须为非负整数'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. 判断院系+专业组合是否存在
+        # 验证院系+专业
         try:
             dep_major = DepartmentMajor.objects.get(department=dept, major=major)
         except DepartmentMajor.DoesNotExist:
-            return Response(
-                {'detail': f'指定的院系“{dept}”与专业“{major}”组合不存在'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'detail': f'院系“{dept}”与专业“{major}”组合不存在'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-        # 3. 全局检查 class_name 是否已存在
-        existing_class = Class.objects.filter(class_name=cls_name).first()
-        if existing_class:
-            # 如果存在，找出它对应的院系+专业，告诉前端
-            dep_major_exist = DepartmentMajor.objects.get(id=existing_class.department_major_id)
-            exist_dept = dep_major_exist.department
-            exist_major = dep_major_exist.major
-            return Response(
-                {
-                    'detail': f'班级 “{cls_name}” 已在 “{exist_dept}” 院系的 “{exist_major}” 专业下存在，无法重复创建'
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # 检查班级全局唯一
+        existing = Class.objects.filter(class_name=cls_name).first()
+        if existing:
+            exist_dm = existing.department_major
+            return Response({
+                'detail': f'班级“{cls_name}”已在“{exist_dm.department}”院系的“{exist_dm.major}”专业下存在'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-        # 4. 构造 Excel 行数据
-        rows = []
-        # 第一行：院系、专业、班级
-        rows.append([f'院系：{dept}', f'专业：{major}', f'班级：{cls_name}'])
-        # 第二行：学号、姓名、（空列）
-        rows.append(['学号', '姓名', ''])
-        # 后续行：学号从1到count，姓名和班级列留空
-        for i in range(1, count + 1):
-            rows.append([i, '', ''])
-
+        # 构造表格数据并保存到本地
+        rows = [[f'院系：{dept}', f'专业：{major}', f'班级：{cls_name}'], ['学号', '姓名', '']]
+        rows += [[i, '', ''] for i in range(1, count + 1)]
         df = pd.DataFrame(rows)
 
-        temp_dir = tempfile.mkdtemp()
-
-        local_dir = os.path.join(settings.BASE_DIR, 'tmp')
-        os.makedirs(local_dir, exist_ok=True)
-
-        # 构造文件名并保存到本地
-        upload_path = 'project/accs/tmp'
+        tmpdir = tempfile.mkdtemp()
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         filename = f"{major}-{dept}-{cls_name}_{count}_{timestamp}_class_list.xlsx"
-        file_path = os.path.join(temp_dir, filename)
-        file_url = f"/accs/tmp/{filename}"
-
+        local_path = os.path.join(tmpdir, filename)
+        print(local_path)
         try:
-            # 保存Excel文件
-            df.to_excel(file_path, header=False, index=False)
+            df.to_excel(local_path, header=False, index=False)
         except ModuleNotFoundError:
-            return Response(
-                {'detail': 'openpyxl 未安装，无法生成 Excel'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({'detail': 'openpyxl 未安装'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Exception as e:
-            return Response(
-                {'detail': f'生成 Excel 失败：{str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({'detail': f'生成 Excel 失败：{e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # 6. 保存到默认存储
+        # 上传至 Seafile
         try:
-            with open(file_path, 'rb') as f:
-                default_storage.save(
-                    os.path.join(upload_path, filename),
-                    f
-                )
+            user = request.user
+            info = UserInfo.objects.get(userId=user.id)
+            repo_id = info.pri_repo_id
+
+            service = FileUpload(seafile_api, seafile_ops)
+
+            seafile_path = f"/file/{filename}"
+            # 调用服务层上传本地文件
+            service.upload_file(repo_id, seafile_path, local_path)
+            # 缓存路径到 Redis，用于后续 GET 生成链接
+            redis_key = f"file:{user.id}"
+            get_redis_connection('file').setex(redis_key, 360000, json.dumps(seafile_path))
         except Exception as e:
-            return Response(
-                {'detail': f'保存到默认存储失败：{str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({'detail': f'上传 Seafile 失败：{e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         finally:
-            # 清理临时目录和文件
+            # 清理本地临时
             try:
-                os.remove(file_path)
-                os.rmdir(temp_dir)
+                os.remove(local_path)
+                os.rmdir(tmpdir)
             except:
                 pass
 
-        # 7. 返回前端文件地址
-        return Response({
-            'file_url': file_url
-        }, status=status.HTTP_201_CREATED)
+        # 保存数据库班级记录
+        Class.objects.create(class_name=cls_name, department_major=dep_major)
+
+        return Response({'detail': 'Excel 上传成功，下载链接请通过 GET 接口获取'}, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        """获取最近一次生成的班级名单下载链接"""
+        user = request.user
+        try:
+            info = UserInfo.objects.get(userId=user.id)
+            repo_id = info.pri_repo_id
+        except UserInfo.DoesNotExist:
+            return Response({'detail': '未找到用户信息'}, status=status.HTTP_404_NOT_FOUND)
+
+        redis_key = f"file:{user.id}"
+        raw = get_redis_connection('file').get(redis_key)
+        if not raw:
+            return Response({
+                'detail': '下载链接不存在，请先上传'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        seafile_path = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+
+        # 生成并返回下载链接
+        try:
+            down_file = seafile_ops.down_file_by_repo(repo_id, seafile_path)
+            return Response({
+                'file_url': down_file
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                'detail': f'生成下载链接失败：{e}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class DepartmentMajorView(APIView):
@@ -1769,3 +1774,195 @@ class AdminUserRoleModificationView(APIView):  # 类名去重
                 "errors": serializer.errors,
                 "message": "数据验证失败"
             }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TemplateCreateView(APIView):
+    """教师创建新的提交模板；必须提供本次提交的标题。"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # 验证老师身份
+        user = request.user
+        try:
+            info = UserInfo.objects.get(userId=user.id)
+        except UserInfo.DoesNotExist:
+            return Response({
+                'code': 404,
+                'error': '未找到用户信息，请联系管理员'
+            }, status=404)
+        if not info or info.role_id != 2:
+            return Response({
+                'detail': '只有老师(role_id=2)才能创建模板'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # 确保提供了标题
+        title = request.data.get('title', '').strip()
+        if not title:
+            return Response({'detail': '请提供本次提交的标题'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 构造序列化器数据
+        data = {
+            'title': title,
+            'description': request.data.get('description', ''),
+            'due_date': request.data.get('due_date'),
+        }
+        serializer = SubmissionTemplateSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+
+        # save() 内部会自动计算并赋值 version
+        serializer.save(created_by=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class StudentSubmitView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        # 验证学生
+        user = request.user
+        try:
+            info = UserInfo.objects.get(userId=user.id)
+            print('info:', info)
+            print("info_s:", info.student.id)
+        except UserInfo.DoesNotExist:
+            return Response({
+                'code': 404,
+                'error': '未找到用户信息，请联系管理员'
+            }, status=404)
+        if not info or info.role_id != 1:
+            return Response({
+                'detail': '只有学生可提交作业'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # 获取模板
+        template_id = request.data.get('template')
+        print('template_id:', template_id)
+        template = SubmissionTemplate.objects.filter(id=template_id).first()
+        print('template:', template)
+        if not template:
+            return Response({'detail': '模板不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        # 构建版本号与文件名
+        version = template.version
+        ext = request.FILES['file'].name.rsplit('.', 1)[-1]
+        print('ext:', ext)
+        userid = str(user.id)
+        filename = f"{userid}_upload_t{template.id}_v{version}.{ext}"
+        print('filename:', filename)
+        seafile_path = f"/file/{filename}"
+        print('seafile_path:', seafile_path)
+        repo_id = info.pri_repo_id
+
+        tmp_dir = tempfile.mkdtemp()
+        local_path = os.path.join(tmp_dir, filename)
+        with open(local_path, 'wb') as f:
+            for chunk in request.FILES['file'].chunks():
+                f.write(chunk)
+
+        # 上传
+        service = FileUpload(seafile_api, seafile_ops)
+        try:
+            service.upload_file(
+                repo_id,
+                seafile_path,
+                local_path
+            )
+        except Exception as e:
+            return Response({
+                'detail': f'文件上传失败：{e}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        finally:
+            try:
+                os.remove(local_path)
+                os.rmdir(tmp_dir)
+            except:
+                pass
+
+        # 保存提交记录
+        data = {
+            'template': template_id,
+            'student': userid,
+            'file': filename,
+            'version': template.version
+        }
+        print('data:', data)
+        serializer = StudentSubmissionSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                'message': f'提交成功，版本 {version}',
+                'data': serializer.data
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def get(self, request):
+        """
+        通过 template 和 version 查询该次提交的所有历史下载链接。
+        URL 示例: GET /api/submit/?template=1&version=2
+        """
+        # 验证学生身份
+        user = request.user
+        try:
+            info = UserInfo.objects.get(userId=user.id)
+            repo_id = info.pri_repo_id
+        except UserInfo.DoesNotExist:
+            return Response({'detail': '未找到用户信息'}, status=404)
+        if info.role_id != 1:
+            return Response({'detail': '只有学生可操作'}, status=403)
+
+        # 获取并校验参数
+        tpl_id = request.query_params.get('template')
+        ver = request.query_params.get('version')
+        if not tpl_id or not ver:
+            return Response({'detail': '请提供 template 和 version 参数'}, status=400)
+        try:
+            ver = int(ver)
+        except ValueError:
+            return Response({'detail': 'version 必须为整数'}, status=400)
+
+        # 查找对应提交记录
+        submission = StudentSubmission.objects.filter(
+            template_id=tpl_id,
+            student=user,
+            version=ver
+        ).first()
+        if not submission:
+            return Response({'detail': '指定版本的提交不存在'}, status=404)
+
+        seafile_path = f"/file/{submission.file_path}"
+
+        try:
+            history = seafile_ops.get_file_history_by_repo(repo_id, seafile_path)
+        except Exception as e:
+            return Response({'detail': f'获取历史失败：{e}'}, status=500)
+
+        data_list = history.get('data') if isinstance(history, dict) else None
+        if not data_list:
+            return Response({'detail': '历史记录格式不正确'}, status=500)
+
+        links = []
+        for item in data_list:
+            commit = item.get('commit_id')
+            ctime = item.get('ctime')
+            description = item.get('description', '')
+            # 去掉开头动作描述，如 'Added '
+            desc = description.split(' ', 1)[-1] if ' ' in description else description
+            # 构造下载链接，使用 Seafile HTTP API 标准格式
+            print(desc)
+            print(repo_id)
+            try:
+                down_file = seafile_ops.down_file_by_repo(repo_id, seafile_path)
+                print('down_file:', down_file)
+                return Response({
+                    'file_url': down_file,
+                    'links': links,
+                    'commit': commit,
+                    'ctime': ctime
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({
+                    'detail': f'生成下载链接失败：{e}'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
