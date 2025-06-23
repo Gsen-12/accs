@@ -1465,12 +1465,9 @@ class UserModificationView(APIView):
 
     def post(self, request):
         user = request.user
-        user_info = UserInfo.objects.get(userId=user.id)
         redis_conn = get_redis_connection("default")
         user_serializer = UserSerializer
         user_info = UserInfo.objects.get(userId=request.user.id)
-        repo_id = user_info.pri_repo_id
-        seafile_operations = SeafileOperations(server_url, token=repo_token)
         repo_id = ava_repo_id
 
         try:
@@ -1517,28 +1514,16 @@ class UserModificationView(APIView):
                     user_info.avatar = f'{server_url}/files/{repo_id}{final_filename}'
                     user_info.save()
 
-                    if seafile_operations.delete_share_file_by_repo(repo_id, ava_path):
-                        seafile_operations.post_share_ava_by_repo(repo_id, ava_path)
-                        share_link = seafile_operations.get_share_file_by_repo(repo_id, ava_path)
-                        if 0 < len((links := [x['link'] for x in share_link])) <= 1:
-                            link = links[0] + '?dl=1'
-                            return Response({
-                                "code": 200,
-                                "message": "头像上传成功",
-                                "data": {
-                                    "link": link
-                                }
-                            })
-                    else:
-                        seafile_operations.post_share_ava_by_repo(repo_id, ava_path)
-                        response = seafile_operations.get_share_file_by_repo(repo_id, ava_path)
+                    try:
+                        dow_file = seafile_ops.down_file_by_repo(repo_id, seafile_path)
+                        print(dow_file)
                         return Response({
-                            "code": 200,
-                            "message": "头像上传成功",
-                            "data": {
-                                "link": ([x['link'] + '?dl=1' for x in response if x['path'] == ava_path]),
-                            }
-                        })
+                            'file_url': dow_file
+                        }, status=status.HTTP_200_OK)
+                    except Exception as e:
+                        return Response({
+                            "detail": f'生成下载链接失败：: {e}',
+                        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 except Exception as e:
                     return Response({
                         "code": 500,
@@ -1571,11 +1556,9 @@ class TempAvatarUploadView(APIView):
     def post(self, request):
         user = request.user
         avatar_file = request.FILES.get('avatar')
-        user_info = UserInfo.objects.get(userId=request.user.id)
         ext = request.FILES.get('avatar').name.split('.')[-1]
         filename = f"{user.id}_tmp_ava_upload.{ext}"
         seafile_path = f"/{user.id}_tmp_ava_upload.{ext}"  # Seafile中的存储路径
-        seafile_operations = SeafileOperations(server_url, token=repo_token)
         repo_id = ava_repo_id
         try:
             # 获取仓库对象
@@ -1607,28 +1590,16 @@ class TempAvatarUploadView(APIView):
                 value=json.dumps(avatar_url)
             )
 
-            if seafile_operations.delete_share_file_by_repo(repo_id, seafile_path):
-                seafile_operations.post_share_ava_by_repo(repo_id, seafile_path)
-                share_link = seafile_operations.get_share_file_by_repo(repo_id, seafile_path)
-                if 0 < len((links := [x['link'] for x in share_link])) <= 1:
-                    link = links[0] + '?dl=1'
-                    return Response({
-                        "code": 200,
-                        "message": "头像上传成功",
-                        "data": {
-                            "link": link
-                        }
-                    })
-            else:
-                seafile_operations.post_share_ava_by_repo(repo_id, seafile_path)
-                response = seafile_operations.get_share_file_by_repo(repo_id, seafile_path)
+            try:
+                dow_file = seafile_ops.down_file_by_repo(repo_id, seafile_path)
+                print(dow_file)
                 return Response({
-                    "code": 200,
-                    "message": "头像上传成功",
-                    "data": {
-                        "link": ([x['link'] + '?dl=1' for x in response if x['path'] == seafile_path]),
-                    }
-                })
+                    'file_url': dow_file
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({
+                    "detail": f'生成下载链接失败：: {e}',
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Exception as e:
             return Response({
                 "code": 500,
