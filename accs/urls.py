@@ -28,6 +28,8 @@ from .views.custom_system import (
     AuditUsersView,
     SaveStudentsView,
     AdminUserRoleModificationView,
+    StudentSubmitView,
+    TemplateCreateView,
 )
 
 router = DefaultRouter()
@@ -49,21 +51,20 @@ urlpatterns = [
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
     path('upload-code/', FileUploadView.as_view(), name='file-upload'),
-    # path('test/', TestViewSet.as_view(), name='test'),
     path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
     path('current-dify-ip/', business_function.current_dify_ip, name='current-dify-ip'),
     path('set-dify-ip/', business_function.set_dify_ip, name='set-dify-ip'),
     path('upload-code/', business_function.upload_code, name='upload-code'),
-    # path('answer/', AddAnswerView.as_view(), name='answer'),
     path('tea/answer/', TeaAnswerView.as_view(), name='tea-answer'),
     path('save/execl/', SaveExeclView.as_view(), name='save-execl'),
     path('save/analyze/', business_function.set_save_analyze, name='save-analyze'),
-    # path('add/stuid/', AddStuidView.as_view(), name='add-stuid'),
     path('generate/excel/', GenerateClassExcelView.as_view(), name='generate-excel'),
     path('admin/department/major/', DepartmentMajorView.as_view(), name='admin-department-major'),
     path('parse/excel/', ParseExcelView.as_view(), name='parse-Excel'),
     path('auditusers/', AuditUsersView.as_view(), name='AuditUsers'),
     path('save/stu/', SaveStudentsView.as_view(), name='save-students'),
     path('analyze/', AnalyzeCodeView.as_view(), name='analyze'),
+    path('template-create/', TemplateCreateView.as_view(), name='template-create'),
+    path('stu-submit/', StudentSubmitView.as_view(), name='stu-submit'),
 ]
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

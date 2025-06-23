@@ -1,115 +1,26 @@
 import json
 import os
 import re
-import tempfile
 
 import pandas as pd
 from django.contrib.auth import get_user_model
 from django_redis import get_redis_connection
 from rest_framework import status
 from rest_framework.decorators import api_view
-from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from seafileapi import SeafileAPI
 
-from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url, repo_token
+from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url
 from accs.models import UserInfo, IPConfig, AnalysisResult, Student
 from accs.serializers import AnalysisSerializer
 from accs.services import get_reliable_local_ip, DifyService
-from accs.utils.seafile_operate import SeafileOperations
 
 User = get_user_model()
 
 seafile_api = SeafileAPI(login_name, pwd, server_url)
 seafile_api.auth()  # 认证
-
-
-class FileUploadView(APIView):
-    permission_classes = [IsAuthenticated]
-    # permission_classes = [AllowAny]
-    parser_classes = [MultiPartParser, FormParser]
-
-    def post(self, request):
-        user = request.user
-        try:
-            user_info = UserInfo.objects.get(userId=user.id)
-        except UserInfo.DoesNotExist:
-            return Response({
-                'code': 404,
-                'error': '未找到用户信息，请联系管理员'
-            }, status=404)
-
-        repo_id = user_info.pri_repo_id
-
-        user_file = request.FILES.get('file')
-        print(user_file)
-        print(request.data)
-        if not user_file:
-            return Response({
-                'code': 400,
-                'error': '未找到上传文件'
-            }, status=400)
-
-        ext = user_file.name.rsplit('.', 1)[-1]
-        filename = f"{user.id}_file_upload.{ext}"
-        seafile_path = f"/file/{filename}"
-
-        seafile_ops = SeafileOperations(server_url, token=repo_token)
-
-        try:
-            # 1. 创建临时目录并保存上传文件
-            tmp_dir = tempfile.mkdtemp()
-            local_path = os.path.join(tmp_dir, filename)
-            with open(local_path, 'wb') as f:
-                for chunk in user_file.chunks():
-                    f.write(chunk)
-
-            # 2. 上传到 Seafile
-            repo = seafile_api.get_repo(repo_id)
-            existing = [info['name'] for info in repo.list_dir('/file')]
-            if filename in existing:
-                repo.delete_file(seafile_path)
-            repo.upload_file('/file', local_path)
-
-            # 分享链接管理：删除旧链接，再创建新链接
-            seafile_ops.delete_share_file_by_repo(
-                repo_id=repo_id,
-                file_path=seafile_path
-            )
-            password = getattr(user_info, 'seafile_password', '')
-            share_info = seafile_ops.post_share_file_by_repo(
-                repo_id=repo_id,
-                file_path=seafile_path,
-                password=password
-            )
-            print(share_info)
-            # 处理 API 返回可能为 list 或 dict
-            if isinstance(share_info, list):
-                info = share_info[0] if share_info else {}
-            else:
-                info = share_info or {}
-            file_url = info.get('link') or info.get('url')
-            print(file_url)
-
-            redis_conn = get_redis_connection("file")
-            redis_conn.setex(
-                name=f"{user.id}_file_upload",
-                time=360000,
-                value=json.dumps(file_url)
-            )
-
-            return Response({
-                'code': 200,
-                'message': '文件上传并生成分享链接成功',
-                'data': {'file_url': file_url}
-            })
-        except Exception as e:
-            return Response({
-                'code': 500,
-                'error': f'上传或分享链接生成失败：{str(e)}'
-            }, status=500)
 
 
 class AnalyzeCodeView(APIView):
