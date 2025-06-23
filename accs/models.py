@@ -1,5 +1,8 @@
-from django.db import models
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth import get_user_model
+from django.db import models, transaction, IntegrityError
+
+User = get_user_model()
 
 
 class Roles(models.Model):
@@ -174,3 +177,46 @@ class UserInfo(models.Model):
 
     def __str__(self):
         return f"{self.userId} ({self.student_id if self.student else '无学号'})"
+
+
+class SubmissionTemplate(models.Model):
+    """
+    教师创建的提交模板，用于学生针对某次作业进行提交。
+    每次以同一标题新建时，自动计算版本号：同一教师、同一标题的 max(version) +1。
+    """
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    created_by = models.ForeignKey(User, related_name='created_templates', on_delete=models.CASCADE)
+    version = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    due_date = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'sub-temp'
+        unique_together = ('title', 'created_by', 'version')
+        ordering = ['-created_at']
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            last = SubmissionTemplate.objects.filter(
+                title=self.title,
+                created_by=self.created_by
+            ).order_by('-version').first()
+            self.version = (last.version if last else 0) + 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.title} (v{self.version} by {self.created_by})"
+
+
+class StudentSubmission(models.Model):
+    student = models.ForeignKey(User, on_delete=models.CASCADE)
+    template = models.ForeignKey(SubmissionTemplate, on_delete=models.CASCADE)
+    version = models.IntegerField()
+    file_path = models.CharField(max_length=500, blank=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'stu-file'
+        verbose_name = '学生文件'
+        verbose_name_plural = '学生文件'

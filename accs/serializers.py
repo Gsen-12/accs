@@ -1,7 +1,7 @@
 from django.core.validators import FileExtensionValidator
 from django.contrib.auth.models import User, Permission
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from accs.models import Roles, UserInfo, DepartmentMajor
+from accs.models import Roles, UserInfo, DepartmentMajor, StudentSubmission, SubmissionTemplate
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from PIL import Image
@@ -83,7 +83,9 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'username', 'password', 'email', 'userId', 'desc', 'homePath', 'avatar', 'realName', 'role_id',
+
             'token', 'gender', 'pri_repo_id', 'pub_repo_id'
+
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -218,3 +220,18 @@ class AnalysisSerializer(serializers.ModelSerializer):
             'severity',
             # 如果有 user 字段也要列出来
         ]
+
+
+class SubmissionTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubmissionTemplate
+        fields = ['id', 'title', 'description', 'due_date', 'created_by', 'created_at']
+        read_only_fields = ['id', 'created_by', 'created_at']
+
+
+class StudentSubmissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentSubmission
+        fields = ['id', 'template', 'student', 'file_path', 'version', 'submitted_at']
+        read_only_fields = ['id', 'submitted_at']
+

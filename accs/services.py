@@ -12,16 +12,13 @@ class DifyService:
 
     @staticmethod
     def get_current_host_ip():
-        # 从数据库获取最新一条 IP 配置，否则返回 默认值：localhost
         latest = IPConfig.objects.order_by('-updated_at').first()
         ip = latest.ip_address if latest else 'localhost'
-        print(f"[get_current_host_ip] 从数据库取到的 IP 是：{ip}")  # 打印 数据库IP
+        print(f"[get_current_host_ip] 从数据库取到的 IP 是：{ip}")
         return ip
 
     @classmethod
     def get_api_url(cls):
-        # dify后端API
-        # host_ip：数据库提取IP，默认值localhost
         host_ip = cls.get_current_host_ip()
         url = f"http://{host_ip}/v1/chat-messages"
         print(f"[get_api_url]：{url}")
@@ -29,74 +26,67 @@ class DifyService:
 
     @classmethod
     def analyze_code(cls, code_content):
-        # 调用Dify的请求头
         headers = {
             "Authorization": f"Bearer {settings.DIFY_API_KEY}",
             "Content-Type": "application/json"
         }
-
-        # 调用Dify的格式，阻塞模式
         payload = {
             "inputs": {},
-            # 学生输入的代码
             "query": code_content,
             "response_mode": "blocking",
             "conversation_id": "",
-            # 跟Dify对话的用户名，后续可用学生id
             "user": "django_backend",
         }
+
+        url = cls.get_api_url()
+        print(f"Dify API: {url}")
+
+        response = None
         try:
-            # 从get_api_url拿URL
-            url = cls.get_api_url()
-            print(f"Dify API: {url}")
             response = requests.post(url, headers=headers, json=payload)
-            print("response:", response)
             resp_json = response.json()
             print('resp_json', resp_json)
-            # 处理报错
+
+            # 处理 Dify 层面错误
             if isinstance(resp_json, dict) and resp_json.get('status') not in (None, 200):
-                time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')    # 打印报错时间
-                print(time)
+                now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print(now, "Dify 返回错误状态", resp_json.get('status'))
                 return {
                     'error_message': resp_json.get('message', 'Unknown error'),
                     'status': resp_json.get('status'),
                 }
 
-            # 打印原始响应
-            print("\n" + "=" * 50 + " 原始响应内容 " + "=" * 50)
-            # print(response.text)
-            print("resp_json:", resp_json)
-            print("=" * 120 + "\n")
-
-            # 检测HTTP状态码
             response.raise_for_status()
             return cls._handle_response(resp_json)
-        except Exception as e:
-            # 一般为Dify_Api错误,或者Dify未启动
-            # return None
-            print(f"API请求失败: {e}")
-            # 如果是 HTTPError，有可能 response.json() 已经包含 code/message/status
+
+        except requests.HTTPError as http_err:
+            # HTTP 错误，优先返回 Dify 自己的 message/status
+            err_data = {}
             try:
-                err = response.json()
-                return {
-                    'error_message': err.get('message', str(e)),
-                    'status': err.get('status', response.status_code),
-                }
-            except:
-                # 一般网络异常等，返回通用错误
-                return {
-                    'error_message': str(e),
-                    'status': getattr(response, 'status', None) or 500,
-                }
+                err_data = response.json()
+            except Exception:
+                pass
+            return {
+                'error_message': err_data.get('message', str(http_err)),
+                'status': err_data.get('status', response.status_code if response else 500),
+            }
+        except Exception as e:
+            # 网络或其他异常
+            print(f"API请求失败: {e}")
+            return {
+                'error_message': str(e),
+                'status': getattr(response, 'status_code', 500),
+            }
 
     @classmethod
     def _handle_response(cls, response_data):
         try:
-            raw_answer = response_data.get('answer', '{}')
-            # 处理可能的markdown格式
+            raw_answer = response_data.get('answer', '')
+            # 去掉 ```json``` 等代码块标记
             raw_answer = re.sub(r"```json?|```", '', raw_answer)
-            print("处理后的内容：", raw_answer)
-            json_texts = re.findall(r"\{[\s\S]*?\}", raw_answer)
+
+            # 匹配 JSON 对象字符串
+            json_texts = re.findall(r"\{[\s\S]*?}", raw_answer)
             combined = {}
             for text in json_texts:
                 try:
@@ -104,7 +94,7 @@ class DifyService:
                     combined.update(part)
                 except json.JSONDecodeError:
                     continue
-            # 返回数据转换
+
             return {
                 'vulnerabilities': int(combined.get('vulnerabilities', 0)),
                 'errors': int(combined.get('errors', 0)),
@@ -114,87 +104,6 @@ class DifyService:
                 'type': combined.get('type', []),
                 'correct_code': combined.get('correct_code', ''),
                 'description': combined.get('description', '')
-            }
-        except Exception as e:
-            print(f"Dify数据转换失败: {e}")
-            raise
-
-
-class DifyAnswer:
-
-    @classmethod
-    def analyze_code(cls, code_content):
-        url = 'http://192.168.101.50/v1/chat-messages'
-        # 调用Dify的请求头
-        headers = {
-            "Authorization": f"Bearer app-uzS2iFDn2VLVAznB2KogZRWq",  # Dify_key在settings
-            "Content-Type": "application/json"
-        }
-
-        # 调用Dify的格式，阻塞模式
-        payload = {
-            "inputs": {},
-            # 学生输入的代码
-            "query": code_content,
-            "response_mode": "blocking",
-            "conversation_id": "",
-            # 跟Dify对话的用户名，后续可用学生id
-            "user": "django_a",
-        }
-        try:
-            # 从get_api_url拿URL
-
-            print(f"Dify_a API: {url}")
-            response = requests.post(url, headers=headers, json=payload)
-            print("response:", response)
-            resp_json = response.json()
-            # 处理报错
-            if isinstance(resp_json, dict) and resp_json.get('status') not in (None, 200):
-                time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')    # 打印报错时间
-                print(time)
-                return {
-                    'error_message': resp_json.get('message', 'Unknown error'),
-                    'status': resp_json.get('status'),
-                }
-
-            # 打印原始响应
-            print("\n" + "=" * 50 + " 原始响应内容 " + "=" * 50)
-            print("resp_json:", resp_json)
-            print("=" * 120 + "\n")
-
-            # 检测HTTP状态码
-            response.raise_for_status()
-            return cls._handle_response(resp_json)
-        except Exception as e:
-            # 一般为Dify_Api错误,或者Dify未启动
-            # return None
-            print(f"API请求失败: {e}")
-            # 如果是 HTTPError，有可能 response.json() 已经包含 code/message/status
-            try:
-                err = response.json()
-                return {
-                    'error_message': err.get('message', str(e)),
-                    'status': err.get('status', response.status_code),
-                }
-            except:
-                # 一般网络异常等，返回通用错误
-                return {
-                    'error_message': str(e),
-                    'status': getattr(response, 'status', None) or 500,
-                }
-
-    @classmethod
-    def _handle_response(cls, response_data):
-        try:
-            raw_answer = response_data.get('answer', '{}')
-            # 处理可能的markdown格式
-            raw_answer = re.sub(r"```json?|```", '', raw_answer)
-            print("处理后的内容：", raw_answer)
-            parsed = json.loads(raw_answer)
-            # 返回数据转换
-            return {
-                'correct_code': parsed.get('correct_code', ''),
-                'description': parsed.get('description', '')
             }
         except Exception as e:
             print(f"Dify数据转换失败: {e}")
