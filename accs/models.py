@@ -47,21 +47,6 @@ class BlacklistedToken(models.Model):
         verbose_name_plural = "token黑名单"
 
 
-class AnalysisResult(models.Model):
-    vulnerabilities = models.IntegerField()  # IntegerField：精确数字
-    errors = models.IntegerField()
-    code_smells = models.IntegerField()
-    accepted_issues = models.IntegerField()
-    duplicates = models.IntegerField()
-    timestamp = models.DateTimeField(auto_now_add=True)  # DateTimeField：时间，扫描时auto_now_add=True自动添加时间
-    type = models.JSONField(default=list, blank=True)  # JSONField：JSON格式
-    severity = models.CharField(max_length=50)  # CharField：短文本
-
-    class Meta:
-        db_table = 'answer'
-        # 指定数据库表名
-
-
 class IPConfig(models.Model):
     """
     单独表，用于存储系统当前 Dify 服务 IP，所有用户均可操作。
@@ -213,10 +198,33 @@ class StudentSubmission(models.Model):
     student = models.ForeignKey(User, on_delete=models.CASCADE)
     template = models.ForeignKey(SubmissionTemplate, on_delete=models.CASCADE)
     version = models.IntegerField()
-    file_path = models.CharField(max_length=500, blank=True)
+    file_name = models.CharField(max_length=500)
     submitted_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'stu-file'
         verbose_name = '学生文件'
         verbose_name_plural = '学生文件'
+
+
+class AnalysisResult(models.Model):
+    vulnerabilities = models.IntegerField()  # IntegerField：精确数字
+    errors = models.IntegerField()
+    code_smells = models.IntegerField()
+    accepted_issues = models.IntegerField()
+    duplicates = models.IntegerField()
+    timestamp = models.DateTimeField(auto_now_add=True)  # DateTimeField：时间，扫描时auto_now_add=True自动添加时间
+    type = models.JSONField(default=list, blank=True)  # JSONField：JSON格式
+    severity = models.CharField(max_length=50)  # CharField：短文本
+    template = models.ForeignKey(SubmissionTemplate, on_delete=models.CASCADE)  # 关联模板
+    user = models.ForeignKey(User, on_delete=models.CASCADE)  # 关联用户
+    correct_code = models.JSONField(default=list, blank=True)  # 存储正确代码
+    description = models.JSONField(default=list, blank=True)  # 存储描述信息
+
+    class Meta:
+        db_table = 'answer'
+        verbose_name = '分析结果'
+        verbose_name_plural = '分析结果'
+
+    def __str__(self):
+        return f"Analysis Result for {self.template.title} (v{self.template.version}) by {self.user}"

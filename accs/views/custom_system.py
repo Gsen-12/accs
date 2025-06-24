@@ -46,7 +46,7 @@ from accs.serializers import (
     SubmissionTemplateSerializer,
     StudentSubmissionSerializer,
 )
-from accs.utils.middleware import UUIDTools, generate_password
+from accs.utils.middleware import UUIDTools
 from accs.utils.seafile_operate import SeafileOperations, FileUpload
 
 User = get_user_model()
@@ -1873,7 +1873,7 @@ class StudentSubmitView(APIView):
         data = {
             'template': template_id,
             'student': userid,
-            'file': filename,
+            'file_name': filename,
             'version': template.version
         }
         print('data:', data)
@@ -1897,9 +1897,10 @@ class StudentSubmitView(APIView):
         try:
             info = UserInfo.objects.get(userId=user.id)
             repo_id = info.pri_repo_id
+            print(repo_id)
         except UserInfo.DoesNotExist:
             return Response({'detail': '未找到用户信息'}, status=404)
-        if info.role_id != 1:
+        if info.role_id != "1":
             return Response({'detail': '只有学生可操作'}, status=403)
 
         # 获取并校验参数
@@ -1921,7 +1922,7 @@ class StudentSubmitView(APIView):
         if not submission:
             return Response({'detail': '指定版本的提交不存在'}, status=404)
 
-        seafile_path = f"/file/{submission.file_path}"
+        seafile_path = f"/file/{submission.file_name}"
 
         try:
             history = seafile_ops.get_file_history_by_repo(repo_id, seafile_path)

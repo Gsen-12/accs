@@ -5,9 +5,8 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 from .views import business_function
 from .views.business_function import (
-    FileUploadView,
     TeaAnswerView,
-    SaveExeclView,
+    SaveExcelView,
     AnalyzeCodeView,
     AnalysisHistoryView,
 )
@@ -49,13 +48,12 @@ urlpatterns = [
     path('admin/User/roles/modification/', AdminUserRoleModificationView.as_view(), name='admin-User-roles-modification'),
     path('captcha/', include('captcha.urls')),
     path('avatar/upload/', TempAvatarUploadView.as_view(), name='avatar-upload'),
-    path('upload-code/', FileUploadView.as_view(), name='file-upload'),
     path('history/', AnalysisHistoryView.as_view(), name='analysis-history'),
     path('current-dify-ip/', business_function.current_dify_ip, name='current-dify-ip'),
     path('set-dify-ip/', business_function.set_dify_ip, name='set-dify-ip'),
     path('upload-code/', business_function.upload_code, name='upload-code'),
     path('tea/answer/', TeaAnswerView.as_view(), name='tea-answer'),
-    path('save/execl/', SaveExeclView.as_view(), name='save-execl'),
+    path('save/execl/', SaveExcelView.as_view(), name='save-execl'),
     path('save/analyze/', business_function.set_save_analyze, name='save-analyze'),
     path('generate/excel/', GenerateClassExcelView.as_view(), name='generate-excel'),
     path('admin/department/major/', DepartmentMajorView.as_view(), name='admin-department-major'),
