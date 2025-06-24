@@ -2,6 +2,11 @@ import json
 import os
 import re
 
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from accs.utils.seafile_operate import SeafileOperations, FileUpload
+import tempfile
+
 import pandas as pd
 from django.contrib.auth import get_user_model
 from django_redis import get_redis_connection
@@ -12,8 +17,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from seafileapi import SeafileAPI
 
-from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url
-from accs.models import UserInfo, IPConfig, AnalysisResult, Student
+from CorrectionPlatformBackend.settings_dev import login_name, pwd, server_url, repo_token
+from accs.models import UserInfo, IPConfig, AnalysisResult, Student, SubmissionTemplate, Class, StudentSubmission
 from accs.serializers import AnalysisSerializer
 from accs.services import get_reliable_local_ip, DifyService
 
@@ -21,6 +26,7 @@ User = get_user_model()
 
 seafile_api = SeafileAPI(login_name, pwd, server_url)
 seafile_api.auth()  # 认证
+seafile_ops = SeafileOperations(server_url, repo_token)
 
 
 class AnalyzeCodeView(APIView):
@@ -30,14 +36,30 @@ class AnalyzeCodeView(APIView):
         try:
             user_id = int(request.data.get('id'))
             print('1', user_id)
+
+            # 获取前端传递的模板ID和版本号
+            template_id = request.data.get('template_id')
+            version = request.data.get('version')
+
+            # 查询模板
+            template = SubmissionTemplate.objects.get(id=template_id)
+            print('template:', template)
+            if not template:
+                return Response({
+                    'detail': '模板不存在'
+                }, status=status.HTTP_404_NOT_FOUND)
         except (TypeError, ValueError):
-            return Response({"error": "Invalid or missing 'id' parameter"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                "error": "无效或缺少“id”参数"
+            }, status=status.HTTP_400_BAD_REQUEST)
 
             # 2. 用 select_related 预先把外键的 Class 一起查出来，避免两次查询
         try:
             user_info = UserInfo.objects.select_related('class_id').get(userId=user_id)
         except UserInfo.DoesNotExist:
-            return Response({"error": "UserInfo not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({
+                "error": "找不到用户信息"
+            }, status=status.HTTP_404_NOT_FOUND)
 
             # 3. 直接拿 class_name：
         class_obj = user_info.class_id  # Class 实例
@@ -142,6 +164,8 @@ class AnalyzeCodeView(APIView):
                 'user': user_id,
                 'correct_code': correct,
                 'description': des,
+                'template_id': template_id,
+                'version': version
             }
             print("cleaned_data:", cleaned_data)
 
@@ -162,6 +186,8 @@ class AnalyzeCodeView(APIView):
                 'correct_code': correct,
                 'description': des,
                 'user': user_id,
+                'template_id': template_id,
+                'version': version,
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -247,10 +273,12 @@ class AnalysisHistoryView(APIView):
 
 class TeaAnswerView(APIView):
     def get(self, request):
-        redis_conn = get_redis_connection("answer")
-        group_id = request.data.get('group_id')
+        redis_conn = get_redis_connection("analyze")
+        class_id = request.data.get('class_id')
+        print(class_id)
+        print(redis_conn.keys())
         try:
-            value = [x.decode() for x in redis_conn.keys() if x.decode().split('_')[0] == group_id]
+            value = [x.decode() for x in redis_conn.keys() if x.decode().split('_')[0] == class_id]
             print(value)
             cache_value = " ".join(value)
             return Response({
@@ -258,51 +286,99 @@ class TeaAnswerView(APIView):
                 'cache_value': cache_value,
             })
         except Exception as e:
-            return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return Response({
+                'detail': str(e)
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     def post(self, request):
         user_id = request.data.get('user_id')
-        group_id = request.data.get('group_id')
+        class_name = request.data.get('class_name')
+
         try:
+            # 校验必传字段
             if not {'user_id'}.issubset(request.data):
-                return Response({"message": "缺少必填字段"}, status=400)
-            cache_key = f'{group_id}_{user_id}_file_upload'
-            redis_conn = get_redis_connection("answer")
+                return Response({
+                    "message": "缺少必填字段"
+                }, status=400)
+
+            # 从Redis中获取缓存数据
+            cache_key = f'{class_name}_{user_id}_file_upload'
+            redis_conn = get_redis_connection("analyze")
             cache_value = redis_conn.get(cache_key)
             if not cache_value:
-                return Response({"code": 404, "message": "无缓存数据"})
+                return Response({
+                    "code": 404, "message": "无缓存数据"
+                })
+
+            # 解码缓存数据
             if isinstance(cache_value, bytes):
                 decoded_str = cache_value.decode('utf-8')
             else:
                 decoded_str = cache_value
 
-            # 兼容旧数据格式（如果存在单引号问题）
+            # 兼容处理可能存在的旧数据格式
             if decoded_str.startswith("'") and decoded_str.endswith("'"):
                 decoded_str = decoded_str.strip("'")
 
-            # 解析JSON
+            # 解析JSON格式数据
             try:
                 parsed_data = json.loads(decoded_str)
             except json.JSONDecodeError:
-                # 处理可能存在的转义字符问题
+                # 处理转义字符问题
                 decoded_str = decoded_str.replace('\\n', '\n').replace('\\"', '"')
                 parsed_data = json.loads(decoded_str)
 
-            # 提取字段并处理换行符
+            # 提取字段
             correct_code = parsed_data.get('correct_code', '').replace('\\n', '\n')
             description = parsed_data.get('description', '').replace('\\n', '\n')
+
+            # 打印解析后的数据（可以删除）
             print('老师查看AI批改:', parsed_data)
 
+            # 获取模板ID和版本号
+            template_id = parsed_data.get('template_id')  # 假设数据中有 template_id 字段
+            version = parsed_data.get('version')  # 假设数据中有 version 字段
+
+            # 查询模板和提交记录
+            template = SubmissionTemplate.objects.get(id=template_id)
+            submission = StudentSubmission.objects.get(template=template, student_id=user_id, version=version)
+            print('template:', template)
+            print('submission', submission)
+            if not template or not submission:
+                return Response({
+                    'detail': '模板不存在 或 提交不存在'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # 保存到 AnalysisResult 模型
+            with transaction.atomic():  # 使用事务保证数据一致性
+                analysis_result = AnalysisResult(
+                    vulnerabilities=parsed_data.get('vulnerabilities', 0),
+                    errors=parsed_data.get('errors', 0),
+                    code_smells=parsed_data.get('code_smells', 0),
+                    accepted_issues=parsed_data.get('accepted_issues', 0),
+                    duplicates=parsed_data.get('duplicates', 0),
+                    type=parsed_data.get('type', []),
+                    severity=parsed_data.get('severity', 'low'),
+                    correct_code=correct_code,
+                    description=description,
+                    template=template,  # 关联模板
+                    user_id=user_id,  # 存储用户ID
+                )
+                analysis_result.save()
+
+            # 返回成功的响应
             return Response({
                 "code": 200,
                 "data": {
                     'correct_code': correct_code,
                     'description': description,
-                    'message': '是否保存？',
+                    'template_id': template.id,
+                    'version': version
                 }
-            }, status=status.HTTP_200_OK)  # 修改为200状态码
+            }, status=status.HTTP_200_OK)
 
         except Exception as e:
+            # 处理异常
             return Response({'detail': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
@@ -334,140 +410,132 @@ class AnswerConfirmView(APIView):
         return Response({"code": 404, "message": "无缓存数据"}, status=404)
 
 
-class SaveExeclView(APIView):
+class SaveExcelView(APIView):
+    """
+    通过 template_id 和 class_id 从数据库查询 AI 批改结果并上传到 Seafile，
+    文件名取自 SubmissionTemplate.title_v{version}.xlsx，只有老师(role_id=2)可调用。
+    POST 参数：
+    {
+        "template_id": 1,
+        "class_id": 3,
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
-        # 获取请求参数
-        execlname = request.data.get('execlname')
-        class_name = request.data.get('class_name')
-        save_path = request.data.get('path')  # 用户指定的保存路径
+        user = request.user
+        download_link = ''
 
-        # 参数验证
-        required_params = {'execlname', 'class_name', 'path'}
-        if not required_params.issubset(request.data):
-            missing = required_params - set(request.data.keys())
+        try:
+            info = UserInfo.objects.get(userId=user.id)
+        except UserInfo.DoesNotExist:
             return Response({
-                "code": 400,
-                "message": f"缺少必要参数: {', '.join(missing)}"
-            }, status=400)
-
-        # 验证路径是否合法
-        if not os.path.isdir(save_path):
+                'code': 404,
+                'error': '未找到用户信息，请联系管理员'
+            }, status=404)
+        if not info or info.role_id != 2:
             return Response({
-                "code": 400,
-                "message": "提供的路径不存在或不是目录"
-            }, status=400)
+                'detail': '只有老师才能'
+            }, status=status.HTTP_403_FORBIDDEN)
 
-        # 从Redis获取数据
-        redis_conn = get_redis_connection("answer")
-
-        # 构建Redis key模式: {class_name}_{student_id}_file_upload
-        redis_key_pattern = f"{class_name}_*_file_upload"
-        redis_keys = [k.decode() for k in redis_conn.keys(redis_key_pattern)]
-
-        if not redis_keys:
+        # 2. 参数校验
+        tpl_id = request.data.get('template_id')
+        stu_id = request.data.get('stu_id')
+        print(tpl_id)
+        cls_id = request.data.get('class_id')
+        if not tpl_id or not cls_id:
             return Response({
-                "detail": f"未找到班级 '{class_name}' 的分析结果"
+                'detail': '缺少 template_id、class_id'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 3. 模板 & 班级 校验
+        # 只允许查询当前老师创建的模板
+        template = SubmissionTemplate.objects.filter(id=tpl_id).first()
+        print(template)
+        if not template:
+            return Response({
+                'detail': '模板不存在'
             }, status=status.HTTP_404_NOT_FOUND)
 
-        # 获取所有键对应的值
-        redis_values = redis_conn.mget(redis_keys)
+        submissions = StudentSubmission.objects.filter(
+            template_id=tpl_id,
+        ).select_related('student')
+        print(submissions)
 
-        # 准备数据结构
-        data_list = []
-        student_ids = set()
+        if not submissions.exists():
+            return Response({
+                'detail': '未找到任何提交记录'
+            }, status=status.HTTP_404_NOT_FOUND)
 
-        # 第一步：提取学生ID并准备批量查询
-        for key in redis_keys:
-            # 从key中提取student_id: {class_name}_{student_id}_file_upload
-            parts = key.split('_')
-            if len(parts) >= 3:
-                student_id = parts[1]  # 假设student_id是key的第二部分
-                student_ids.add(student_id)
-
-        # 批量查询学生信息
-        students = Student.objects.filter(student_id__in=student_ids)
-        student_map = {str(student.student_id): student for student in students}
-
-        # 第二步：处理Redis数据
-        for key, value in zip(redis_keys, redis_values):
-            if not value:
-                continue
-
-            # 从key中提取student_id
-            parts = key.split('_')
-            if len(parts) < 3:
-                continue
-
-            student_id = parts[1]
-            student = student_map.get(student_id)
-
-            if not student:
-                # 如果找不到学生信息，使用默认值
-                student_name = "未知学生"
-                class_info = "未知班级"
-            else:
-                student_name = student.name
-                class_info = student.class_info.name if student.class_info else "未知班级"
-
+        # 5. 准备 Excel 数据
+        rows = []
+        for sub in submissions:
             try:
-                # 解析Redis值 (假设存储的是JSON字符串)
-                data_dict = json.loads(value.decode())
+                ar = AnalysisResult.objects.get(user_id=stu_id)
+                correct_code = ar.correct_code  # 替换为实际字段
+                description = ar.description  # 替换为实际字段
+            except AnalysisResult.DoesNotExist:
+                correct_code = ''
+                description = ''
 
-                # 获取correct_code和description
-                correct_code = data_dict.get('correct_code', '')
-                description = data_dict.get('description', '')
+            stu = sub.student
+            student_id = stu.studentinfo.student.student_id if hasattr(stu, 'studentinfo') else str(stu.id)
+            student_name = stu.studentinfo.student.name if hasattr(stu, 'studentinfo') else stu.get_username()
+            user_info = UserInfo.objects.select_related('class_id').get(userId=stu_id)
+            class_obj = user_info.class_id  # Class 实例
+            class_name = class_obj.class_name
+            print('class_name', class_name)
 
-                # 添加到数据列表
-                data_list.append({
-                    '学号': student_id,
-                    '姓名': student_name,
-                    '班级': class_info,
-                    'correct_code': correct_code,
-                    'description': description
-                })
+            rows.append({
+                '学号': student_id,
+                '姓名': student_name,
+                '班级': class_name,
+                'correct_code': correct_code,
+                'description': description
+            })
 
-            except json.JSONDecodeError:
-                # 如果解析失败，存储原始值
-                data_list.append({
-                    '学号': student_id,
-                    '姓名': student_name,
-                    '班级': class_info,
-                    'correct_code': '解析错误',
-                    'description': value.decode()
-                })
+        # 6. 构建 DataFrame
+        df = pd.DataFrame(rows)[['学号', '姓名', '班级', 'correct_code', 'description']]
 
-        # 如果没有有效数据
-        if not data_list:
-            return Response({
-                "detail": "未找到有效的分析结果数据"
-            }, status=status.HTTP_404_NOT_FOUND)
+        # 7. 保存到临时文件并上传到 Seafile
+        title = template.title.strip().replace('/', '_')
+        filename = f"{title}_v{template.version}.xlsx"
 
-        # 创建DataFrame
+        # 临时目录用于存储 Excel 文件
+        tmp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(tmp_dir, filename)
+
         try:
-            df = pd.DataFrame(data_list)
-            # 重新排序列顺序
-            df = df[['学号', '姓名', '班级', 'correct_code', 'description']]
+            df.to_excel(file_path, index=False)
         except Exception as e:
-            return Response({
-                'detail': f'创建数据框失败: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'detail': f'保存失败：{e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # 构建完整文件路径
-        filename = f"{execlname}.xlsx"
-        full_path = os.path.join(save_path, filename)
-
-        # 保存Excel文件
+        # 8. 上传到 Seafile
         try:
-            df.to_excel(full_path, index=False)
-        except Exception as e:
-            return Response({
-                'detail': f'保存Excel文件失败: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            file_upload = FileUpload(seafile_api, seafile_ops)
+            repo_id = info.pri_repo_id
+            seafile_path = f"/file/{filename}"
 
-        # 返回成功响应
+            file_upload.upload_file(repo_id, seafile_path, file_path)
+
+            # 获取下载链接
+            download_link = seafile_ops.down_file_by_repo(repo_id, seafile_path)
+
+        except Exception as e:
+            return Response({'detail': f'上传到 Seafile 失败：{e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        finally:
+            # 删除临时文件
+            try:
+                os.remove(file_path)
+                os.rmdir(tmp_dir)
+            except:
+                pass
+
+        # 返回 Seafile 链接
         return Response({
-            "code": 200,
-            "message": "文件保存成功",
-            "path": full_path,
-            "student_count": len(data_list)
+            'code': 200,
+            'message': '文件上传成功',
+            'file_url': download_link,
+            'record_count': len(rows)
         }, status=status.HTTP_200_OK)
